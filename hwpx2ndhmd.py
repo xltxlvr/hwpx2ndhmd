@@ -67,7 +67,7 @@ class Ctx:
             for ph in nm.findall(h_('paraHead')):
                 lv[int(ph.get('level') or 1)] = (ph.text or '', ph.get('numFormat') or 'DIGIT', int(ph.get('start') or 1))
             self.numdefs[nm.get('id')] = lv
-        self.in_note = False
+        self.in_note = False; self.used_endnote = False
         self.pending_notes = []                         # 지금 문단의 각주 정의 (문단 다음에 낸다)
         self.fn_labels = set()
         self.numcount = {}                              # numbering id -> [수준별 센 개수]
@@ -336,7 +336,12 @@ def para_parts(ctx, p):
             elif tag == 'ctrl':
                 for c in ch:
                     ct = c.tag.split('}')[1]
-                    if ct == 'endNote' and id(c) not in ctx._note_ids:
+                    if ct == 'endNote' and ctx.a.endnotes == 'ref':
+                        ctx.stats['endnote'] += 1; ctx.used_endnote = True
+                        label = footnote_label(ctx, c, 'en')
+                        t('[^%s]{end}' % label)                      # ndhmd4tex: mappingrule notes.end -> \endnote{%s}
+                        ctx.pending_notes.append((label, footnote_paras(ctx, c, True)))
+                    elif ct == 'endNote' and ctx.a.endnotes == 'collect' and id(c) not in ctx._note_ids:
                         ctx._note_ids.add(id(c)); ctx.endnotes.append(c)
                     elif ct == 'footNote' and ctx.a.footnotes != 'drop':
                         ctx.stats['footnote'] += 1
@@ -522,9 +527,9 @@ def split_links(md):
     return '\n'.join(out)
 
 
-def footnote_label(ctx, fn):
-    """각주 이름: 한글의 각주 번호 그대로 ([^12]). 겹치면 -2, -3 을 붙이지 않고 알파벳을 덧붙인다."""
-    base = (fn.get('number') or str(len(ctx.fn_labels) + 1)).strip() or str(len(ctx.fn_labels) + 1)
+def footnote_label(ctx, fn, prefix=''):
+    """각주 이름: 한글의 각주 번호 그대로 ([^12]). 미주는 앞에 en 을 붙인다 ([^en3]). 겹치면 알파벳을 덧붙인다."""
+    base = prefix + ((fn.get('number') or str(len(ctx.fn_labels) + 1)).strip() or str(len(ctx.fn_labels) + 1))
     lab, k = base, 0
     while lab in ctx.fn_labels:
         k += 1; lab = base + 'abcdefghijklmnopqrstuvwxyz'[(k - 1) % 26] * ((k - 1) // 26 + 1)
@@ -532,8 +537,17 @@ def footnote_label(ctx, fn):
     return lab
 
 
-def footnote_paras(ctx, fn):
+def footnote_paras(ctx, fn, endnote=False):
     """각주 안 문단들 -> 글(수식 표지 포함) 목록. 그림·표 같은 블록은 그 자리에 문단으로 끼운다."""
+    prev = ctx.in_note
+    if endnote: ctx.in_note = True                 # 미주 안의 작은 아이콘 그림은 건너뛴다
+    try:
+        return _footnote_paras(ctx, fn)
+    finally:
+        ctx.in_note = prev
+
+
+def _footnote_paras(ctx, fn):
     out = []
     sub = fn.find(p_('subList'))
     for p in (sub.findall(p_('p')) if sub is not None else []):
@@ -715,7 +729,7 @@ def convert(path, a):
             continue
         for s in seq: emit(role, s)
     flush()
-    if ctx.endnotes and a.endnotes == 'end':
+    if ctx.endnotes and a.endnotes == 'collect':
         out.append(a.endnote_break)
         out.extend(endnotes_md(ctx))
     md = re.sub(r'\n{3,}', '\n\n', '\n\n'.join(x for x in out)).strip() + '\n'
@@ -733,8 +747,14 @@ def convert(path, a):
         if line not in pre: pre.append(line)
     if getattr(a, 'env_in_preamble', False) and ctx.envs:
         pre += [l for l in env_table_tex(ctx, a.input).splitlines() if l.startswith('\\ifcsname')]
+    fm = ''
+    if getattr(ctx, 'used_endnote', False):       # [^enN]{end} 를 \endnote{…} 로 바꾸고 문서 끝에 미주를 모은다
+        fm += "mappingrule: |\n  notes:\n    end: '\\endnote{%s}'\n"
+        pre += ['\\usepackage{endnotes}', '\\AtEndDocument{\\theendnotes}']
     if pre:
-        md = '---\npreamble+: |\n' + ''.join('  %s\n' % l for l in pre) + '---\n\n' + md
+        fm += 'preamble+: |\n' + ''.join('  %s\n' % l for l in pre)
+    if fm:
+        md = '---\n' + fm + '---\n\n' + md
     ctx.needs_other = sorted(set(re.findall(r'\\(?:oiint|oiiint)\b', md)))   # amsmath/amssymb 만으로는 안 되는 명령
     return md, ctx
 
@@ -832,9 +852,10 @@ def main():
     ap.add_argument('--env-in-preamble', action='store_true', help='\\newenvironment 목록을 front matter 의 preamble+: 에도 넣는다')
     ap.add_argument('--footnotes', choices=['ref', 'inline', 'drop'], default='ref',
                     help='ref: [^1] 과 [^1]: 정의 (문단 바로 뒤) / inline: ^[…] / drop: 버린다')
-    ap.add_argument('--endnotes', choices=['end', 'drop'], default='end',
-                    help='end: 미주를 모아 문서 끝 별면에 낸다 / drop: 버린다')
-    ap.add_argument('--endnote-break', default='\\newpage', help='미주 앞에 넣을 줄 (기본 \\newpage)')
+    ap.add_argument('--endnotes', choices=['ref', 'collect', 'drop'], default='ref',
+                    help='ref: 본문에 [^en1]{end}, 정의는 문단 뒤에 내고 front matter 에 \\endnote 설정을 넣는다 (ndhmd4tex) / '
+                         'collect: 번호 붙인 미주를 문서 끝 별면에 모아 낸다 (본문에 표지 없음) / drop: 버린다')
+    ap.add_argument('--endnote-break', default='\\newpage', help='collect 일 때 미주 앞에 넣을 줄 (기본 \\newpage)')
     ap.add_argument('--no-para-numbers', dest='para_numbers', action='store_false',
                     help='한글의 자동 문단 번호({1}. 꼴)를 넣지 않는다')
     ap.add_argument('--keep-cell-text', action='store_true', default=True)
