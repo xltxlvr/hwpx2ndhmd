@@ -10,7 +10,7 @@ import re, sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from hwpeq_tables import TABLES as T
 
-__version__ = '0.0.4'
+__version__ = '0.0.10'
 
 UNKNOWN = set()          # 해석하지 못한 명령 (호출한 쪽에서 보고용)
 WARN = []                # (수식 원문, 메시지) — \left/\right 짝 보정 등 호출한 쪽에서 보고용

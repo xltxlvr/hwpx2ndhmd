@@ -4,15 +4,15 @@
  - 레이아웃 무시, 텍스트·수식 보존, 그림은 자리만, 표는 변환 가능한 것만 변환(아니면 자리 + 선택적으로 셀 글)
  - 문단 스타일 -> 환경  :::{이름} ... :::      (개요 N / 개요 수준이 있는 문단은 # 헤딩)
  - 스타일이 없는 문서를 위한 헤딩 추정(--headings=auto)
- - 글상자·표 셀 글 등 인용 형태로 남기는 것은 :::{quote} 로 낸다
+ - 글상자·표 셀 글 등 인용 형태로 남기는 것은 :::{quote} 로 낸다 (문단이 여럿이면 :::{quotation})
 수식은 hwpeq.py (rhwp 규칙 기반) 가 LaTeX 로 바꾼다.
 """
-import sys, os, re, io, json, zipfile, argparse, collections, posixpath
+import sys, os, re, io, json, zipfile, argparse, collections, posixpath, math, unicodedata
 import xml.etree.ElementTree as ET
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import hwpeq
 
-__version__ = '0.0.4'
+__version__ = '0.0.13'
 
 PN = 'http://www.hancom.co.kr/hwpml/2011/paragraph'
 HN = 'http://www.hancom.co.kr/hwpml/2011/head'
@@ -35,6 +35,51 @@ KINDS = [  # (이름, 정규식, 번호체계 깊이를 알려 주는 그룹) --
 ]
 
 
+# ---- 글자 서식(서체 계열·굵게·기울임·취소선·밑줄·강조점) -> ndhmd4tex 인라인 마크업 ----
+# 본문 글에는 \x03코드\x04 … \x05 표지로 넣어 두었다가, 마지막에 render_marks() 가 마크업으로 바꾼다.
+#   S = _sans_  T = __sans 굵게__  B = **굵게**  I = *기울임*  J = ***굵은 기울임***  X = ~~취소선~~  U = ==밑줄== (mappingrule extra_inline)  D = ^^방점^^
+SANS_RE = re.compile(r'돋움|고딕|굴림|Gothic|Dotum|Gulim|Sans|Arial|Helvetica|Verdana|Tahoma|Malgun|맑은|Segoe|Calibri|Headline|헤드라인', re.I)
+MARK_RE = re.compile('\x03[A-Z]+\x04|\x05')
+LANG_OF = {'hangul': 'HANGUL', 'latin': 'LATIN', 'hanja': 'HANJA', 'japanese': 'JAPANESE', 'other': 'OTHER', 'symbol': 'SYMBOL'}
+SCRIPT_KO = {'hangul': '한글', 'latin': '영문', 'hanja': '한자', 'japanese': '일본어', 'other': '기타', 'symbol': '기호'}
+
+
+def script_of(c):
+    """글자 하나 -> hwpx 의 글꼴 칸 이름 (hangul/latin/hanja/japanese/other). 공백은 None"""
+    o = ord(c)
+    if c.isspace(): return None
+    if 0xAC00 <= o <= 0xD7A3 or 0x1100 <= o <= 0x11FF or 0x3130 <= o <= 0x318F: return 'hangul'
+    if 0x4E00 <= o <= 0x9FFF or 0x3400 <= o <= 0x4DBF or 0xF900 <= o <= 0xFAFF: return 'hanja'
+    if 0x3040 <= o <= 0x30FF: return 'japanese'
+    if o < 0x250: return 'latin'
+    return 'other'
+
+
+def strip_marks(s):
+    return MARK_RE.sub('', s)
+
+
+def render_marks(md, ctx):
+    """\x03코드\x04글\x05 -> 마크업. 같은 서식으로 이어진 구간은 하나로 합치고, 앞뒤 공백은 표지 밖으로 뺀다."""
+    pat = re.compile('\x03([A-Z]+)\x04((?:(?!\x05).)*)\x05([ \t]*)\x03\\1\x04', re.S)     # 같은 서식 + 사이에 공백뿐이면 하나로
+    while True:
+        m = pat.search(md)
+        if not m: break
+        md = md[:m.start()] + '\x03%s\x04%s%s' % (m.group(1), m.group(2), m.group(3)) + md[m.end():]
+    WRAP = {'S': '_', 'T': '__', 'B': '**', 'I': '*', 'J': '***', 'X': '~~', 'U': '==', 'D': '^^'}
+    def rep(m):
+        code, tx = m.group(1), m.group(2)
+        inner = tx.strip()
+        if not inner: return tx
+        lead = tx[:len(tx) - len(tx.lstrip())]; trail = tx[len(tx.rstrip()):]
+        for c in code:                                  # 앞 글자가 안쪽 (S/T/B/I/J -> X -> U -> D)
+            inner = WRAP[c] + inner + WRAP[c]
+            ctx.stats['mark_' + c] += 1
+            if c == 'U': ctx.used_underline = True
+        return lead + inner + trail
+    return re.sub('\x03([A-Z]+)\x04((?:(?!\x05).)*)\x05', rep, md, flags=re.S)
+
+
 class Ctx:
     def __init__(self, a, z):
         self.a = a
@@ -43,6 +88,9 @@ class Ctx:
         self.styles = {s.get('id'): s for s in hd.iter(h_('style'))}
         self.parapr = {p.get('id'): p for p in hd.iter(h_('paraPr'))}
         self.charpr = {c.get('id'): c for c in hd.iter(h_('charPr'))}
+        self.fontfaces = {ff.get('lang'): {f.get('id'): f.get('face') for f in ff.findall(h_('font'))} for ff in hd.iter(h_('fontface'))}
+        self._sans = {}; self.used_underline = False; self.roots = []
+        self.sans_extra = [x.strip() for x in (a.sans_fonts or '').split(',') if x.strip()]
         self.smap = {}
         if a.style_map:
             self.smap = json.load(open(a.style_map, encoding='utf8'))
@@ -58,7 +106,7 @@ class Ctx:
         self.outdir = os.path.dirname(os.path.abspath(a.output)) if a.output else os.getcwd()
         self.image_files = {}; self.image_info = []; self.warn = []; self.consumed = set()
         self.display_list = []
-        self.tops = []; self.top_index = {}; self.image_sizes = []; self.textwidth = 51026
+        self.tops = []; self.top_index = {}; self.image_sizes = []; self.textwidth = 51026; self.body_h = 0; self.body_font = 0; self.used_wavedash = False
         self.headings = []        # 보고용
         self.endnotes = []; self._note_ids = set()      # 본문에서 만난 미주 (마지막에 모아 낸다)
         self.numdefs = {}                               # numbering id -> {수준(1~): (모양 글, 형식, 시작값)}
@@ -68,6 +116,7 @@ class Ctx:
                 lv[int(ph.get('level') or 1)] = (ph.text or '', ph.get('numFormat') or 'DIGIT', int(ph.get('start') or 1))
             self.numdefs[nm.get('id')] = lv
         self.in_note = False; self.used_endnote = False
+        self.tail_notes = []                            # --notes-at-end: (이름, 번호, 문단들)
         self.pending_notes = []                         # 지금 문단의 각주 정의 (문단 다음에 낸다)
         self.fn_labels = set()
         self.numcount = {}                              # numbering id -> [수준별 센 개수]
@@ -116,6 +165,80 @@ class Ctx:
             if d is None: return m.group(0)
             return '{%s}' % num_format(cnt[k - 1] - 1 + d[2], d[1])
         return re.sub(r'\^(\d)', rep, tmpl)
+
+    def face(self, cp, script):
+        """charPr 의 서체 이름 (글꼴 칸 script)"""
+        fr = cp.find(h_('fontRef'))
+        if fr is None: return ''
+        return self.fontfaces.get(LANG_OF.get(script, 'OTHER'), {}).get(fr.get(script) or '', '')
+
+    def is_sans(self, face):
+        if face not in self._sans:
+            self._sans[face] = bool(SANS_RE.search(face)) or any(x.lower() in face.lower() for x in self.sans_extra)
+        return self._sans[face]
+
+    def fam_vote(self, cp, text):
+        """글자들의 서체가 sans 쪽이 많으면 'sf', 아니면 'rm' (글자 종류마다 그 칸의 서체를 본다)"""
+        sf = rm = 0
+        for c in text:
+            sc = script_of(c)
+            if sc is None or not c.isalpha(): continue
+            if self.is_sans(self.face(cp, sc)): sf += 1
+            else: rm += 1
+        if sf == rm == 0: return 'sf' if self.is_sans(self.face(cp, 'hangul')) else 'rm'
+        return 'sf' if sf > rm else 'rm'
+
+    @staticmethod
+    def cp_flags(cp):
+        ul = cp.find(h_('underline')); so = cp.find(h_('strikeout'))
+        ult = ul.get('type') if ul is not None else 'NONE'
+        return dict(B=cp.find(h_('bold')) is not None, I=cp.find(h_('italic')) is not None,
+                    X=(so is not None and so.get('shape') not in (None, 'NONE')) or ult == 'CENTER',
+                    U=ult == 'BOTTOM', D=cp.get('symMark') not in (None, 'NONE'))
+
+    def doc_family(self):
+        """문서 본문에서 글자가 가장 많이 쓰인 서체 계열('rm'/'sf'). 한 번만 센다."""
+        if getattr(self, '_docfam', None): return self._docfam
+        cnt = collections.Counter()
+        for root in self.roots:
+            for pp in root.iter(p_('p')):
+                for run in pp.findall(p_('run')):
+                    cp = self.charpr.get(run.get('charPrIDRef'))
+                    if cp is None: continue
+                    for t in run.findall(p_('t')):
+                        for c in ''.join(t.itertext()):
+                            sc = script_of(c)
+                            if sc and c.isalpha(): cnt['sf' if self.is_sans(self.face(cp, sc)) else 'rm'] += 1
+        self._docfam = 'sf' if cnt['sf'] > cnt['rm'] else 'rm'
+        return self._docfam
+
+    def mark(self, p, run, text):
+        """글 한 덩어리(run)에 문단 스타일의 기본 서식과 다른 점이 있으면 \x03코드\x04글\x05 로 싼다.
+        서체는 rm <-> sf 만 다룬다: sans 는 _글_, sans 굵게는 __글__ (sans 기울임은 문법이 없어 버린다).
+        굵은 기울임은 ***글***."""
+        if not self.a.inline_marks or not text.strip(): return text
+        rc = self.charpr.get(run.get('charPrIDRef'))
+        st = self.styles.get(p.get('styleIDRef'))
+        bc = self.charpr.get(st.get('charPrIDRef')) if st is not None else None
+        if rc is None or bc is None or rc is bc: return text
+        fr, fb = self.cp_flags(rc), self.cp_flags(bc)
+        core = ''
+        fam_r, fam_b, base = self.fam_vote(rc, text), self.fam_vote(bc, text), self.doc_family()
+        bold, ital = fr['B'] and not fb['B'], fr['I'] and not fb['I']
+        # 서체: 문서 본문이 rm 이고 글자가 sans 이면 _글_ (굵으면 __글__). 단 문단 스타일 자체가 sans 면(인용문 환경 등) 스타일이 맡으므로 표시하지 않는다.
+        # 문서 본문이 sans 이면 sans 가 기본이므로 표시하지 않고, 그 안의 rm 글자는 표시할 문법이 없다.
+        if base == 'rm' and fam_r == 'sf' and fam_b == 'rm':
+            core = 'T' if bold else 'S'
+            if ital: self.stats['sf_drops_italic'] += 1
+        else:
+            if base == 'sf' and fam_r == 'rm': self.stats['rm_in_sf_skipped'] += 1
+            if bold and ital: core = 'J'
+            elif bold: core = 'B'
+            elif ital: core = 'I'
+        code = core + ''.join(c for c in 'XUD' if fr[c] and not fb[c])
+        if not code: return text
+        lead = text[:len(text) - len(text.lstrip())]; trail = text[len(text.rstrip()):]
+        return lead + '\x03%s\x04%s\x05' % (code, text.strip()) + trail        # 앞뒤 공백·줄바꿈은 표지 밖에 둔다
 
     def char_props(self, run):
         c = self.charpr.get(run.get('charPrIDRef'))
@@ -357,7 +480,8 @@ def image_md(ctx, pic, p, frame_w=None):
 # ===================== 인라인 / 블록 =====================
 def quote_block(paras):
     paras = [x for x in paras if x.strip()]
-    return ':::{quote}\n' + '\n\n'.join(paras) + '\n:::' if paras else ''
+    env = 'quotation' if len(paras) > 1 else 'quote'          # 문단이 여럿(빈 줄·\\par 가 있으면) quote 가 아니라 quotation
+    return ':::{%s}\n' % env + '\n\n'.join(paras) + '\n:::' if paras else ''
 
 
 def para_parts(ctx, p):
@@ -368,16 +492,26 @@ def para_parts(ctx, p):
         for ch in run:
             tag = ch.tag.split('}')[1]
             if tag == 't':
-                t(ch.text or '')
+                buf = [ch.text or '']
                 for c in ch:
                     ct = c.tag.split('}')[1]
-                    if ct == 'tab': t(' ')
-                    elif ct == 'lineBreak': t('  \n')
-                    t(c.tail or '')
+                    if ct == 'tab': buf.append(' ')
+                    elif ct == 'lineBreak': buf.append('  \n')
+                    buf.append(c.tail or '')
+                s_t = ''.join(buf)
+                if '\u223c' in s_t:                      # 옛 입력기가 물결표로 찍던 ∼(U+223C): 글 속에서는 \~ 로 내고 mappingrule wavedash 로 물결표를 만든다
+                    s_t = s_t.replace('\u223c', '\\~'); ctx.used_wavedash = True
+                t(ctx.mark(p, run, s_t))
             elif tag == 'ctrl':
                 for c in ch:
                     ct = c.tag.split('}')[1]
-                    if ct == 'endNote' and ctx.a.endnotes == 'ref':
+                    if ctx.a.notes_at_end and ct in ('footNote', 'endNote'):
+                        nm = '각주' if ct == 'footNote' else '미주'
+                        num = (c.get('number') or str(len(ctx.tail_notes) + 1)).strip()
+                        ctx.stats['footnote' if ct == 'footNote' else 'endnote'] += 1
+                        t('(%s %s)' % (nm, num))                     # 본문에는 평문 자리표시만
+                        ctx.tail_notes.append((nm, num, footnote_paras(ctx, c, ct == 'endNote')))
+                    elif ct == 'endNote' and ctx.a.endnotes == 'ref':
                         ctx.stats['endnote'] += 1; ctx.used_endnote = True
                         label = footnote_label(ctx, c, 'en')
                         t('[^%s]{end}' % label)                      # ndhmd4tex: mappingrule notes.end -> \endnote{%s}
@@ -408,7 +542,7 @@ def para_parts(ctx, p):
 
 def para_text(ctx, p):
     # 셀·글상자 글: 글 + 그림(![](…)) 을 이어 붙인다
-    return ' '.join(s for k, s in para_parts(ctx, p) if k == 't' or s.startswith('!['))
+    return ' '.join(strip_marks(s) for k, s in para_parts(ctx, p) if k == 't' or s.startswith('!['))
 
 
 def cell_paras(ctx, root):
@@ -436,7 +570,59 @@ def shape(ctx, e):
     return '<!-- SHAPE:%s -->' % kind if ctx.a.show_empty_shapes else ''
 
 
+def _em_width(text):
+    """글자 폭의 합(em 단위): 한글·한자 등 전각은 1, 그 밖은 0.55, 공백은 0.3"""
+    w = 0.0
+    for c in text:
+        if c.isspace(): w += 0.3
+        elif unicodedata.east_asian_width(c) in 'WF': w += 1.0
+        else: w += 0.55
+    return w
+
+
+def est_table_height(ctx, t):
+    """표를 '내용만으로' 조판했을 때의 높이 추정(HWPUNIT). 한글에 저장된 표 높이는 고정 행 높이·빈 칸·그림이 섞여 있고
+    쪽을 넘는 표는 첫 쪽 부분만 저장되므로 믿을 수 없어서, 칸 너비에 글자 폭을 채워 줄 수를 센다.
+    열 너비는 한글의 칸 너비 비율을 따르되 본문 너비를 넘으면 줄인다. 추정할 수 없으면 None."""
+    em = ctx.body_font or 1000
+    rows = t.findall(p_('tr'))
+    if not rows: return None
+    sz = t.find(p_('sz')); tw = int(sz.get('width') or 0) if sz is not None else 0
+    scale = min(1.0, ctx.textwidth / tw) if tw > 0 else 1.0
+    total = 0.0
+    for tr in rows:
+        lines = 1
+        for tc in tr.findall(p_('tc')):
+            cs = tc.find(p_('cellSz')); cw = int(cs.get('width') or 0) if cs is not None else 0
+            if cw <= 0: return None
+            usable = max(cw * scale - 1000, em * 2)            # 칸 안쪽 여백을 뺀 너비
+            n = 0
+            for pp in tc.iter(p_('p')):
+                txt = ''.join(''.join(x.itertext()) for x in pp.iter(p_('t')))
+                w = _em_width(txt) + 6 * sum(1 for _ in pp.iter(p_('equation')))
+                n += max(1, math.ceil(w * em / usable))
+            lines = max(lines, n)
+        total += lines * 1.5 * em + 0.6 * em                      # 줄 간격 1.5, 행 위아래 여백
+    return total
+
+
+def is_long_table(ctx, t, nrows):
+    """표가 길다고 볼 조건: 내용으로 조판한 추정 높이가 본문 높이의 --long-table 배 이상이거나, 행이 --long-table-rows 개 이상.
+    높이를 추정하지 못하면(칸 너비 없음, 본문 높이를 모름) 행 수만 본다."""
+    a = ctx.a
+    if a.long_table_rows and nrows >= a.long_table_rows: return True
+    if a.long_table and ctx.body_h > 0:
+        h = est_table_height(ctx, t)
+        if h is None: ctx.stats['tbl_height_unknown'] += 1
+        elif h >= a.long_table * ctx.body_h: return True
+    return False
+
+
 def table(ctx, t):
+    if ctx.a.no_table_conversion:                      # 표를 변환하지 않고 칸 안의 글만 칸 순서대로 평문단으로 남긴다
+        ctx.stats['tbl_text'] += 1
+        texts = [x for tr in t.findall(p_('tr')) for c in tr.findall(p_('tc')) for x in cell_paras(ctx, c)]
+        return '\n\n'.join(lsafe(x) for x in texts)
     rows = [tr.findall(p_('tc')) for tr in t.findall(p_('tr'))]
     simple = all(c.find(p_('cellSpan')).get('colSpan') == '1' and c.find(p_('cellSpan')).get('rowSpan') == '1' for r in rows for c in r)
     simple = simple and not any(True for _ in t.iter(p_('pic'))) and not any(x is not t for x in t.iter(p_('tbl')))
@@ -445,6 +631,7 @@ def table(ctx, t):
         ctx.stats['tbl_ok'] += 1
         L = ['| ' + ' | '.join(ctext(c) for c in rows[0]) + ' |', '|' + '---|' * len(rows[0])]
         L += ['| ' + ' | '.join(ctext(c) for c in r) + ' |' for r in rows[1:]]
+        if is_long_table(ctx, t, len(rows)): L.append('{env=long}'); ctx.stats['tbl_long'] += 1       # ndhmd4tex: 쪽을 넘는 표(longtable)
         return '\n'.join(L)
     ctx.stats['tbl_ph'] += 1
     head = '<!-- TABLE %sx%s: 변환 불가(병합/그림 포함) -->' % (t.get('rowCnt'), t.get('colCnt'))
@@ -545,11 +732,12 @@ def display_math(ctx, text):
 def lsafe(s):
     """문단 첫머리가 마크다운 목록·제목·인용으로 읽히지 않게 한다.
     글로 쓴 번호 '1. ' / '2)' 는 {1}. 꼴로(문단 번호와 같은 방식), '* ' '- ' '+ ' '# ' '> ' 는 역슬래시로 막는다."""
+    pre = re.match('(?:\x03[A-Z]+\x04)*', s).group(); s0 = s; s = s[len(pre):]       # 서식 표지 뒤의 글을 본다
     m = re.match(r'^(\d{1,9})([.)])(\s|$)', s)
-    if m: return '{%s}%s%s' % (m.group(1), m.group(2), s[m.end(1) + 1:])
+    if m: return pre + '{%s}%s%s' % (m.group(1), m.group(2), s[m.end(1) + 1:])
     m = re.match(r'^([*+\-#>])(\s|$)', s)
-    if m: return '\\' + s
-    return s
+    if m: return pre + '\\' + s
+    return s0
 
 
 _MATH_SPLIT = re.compile(r'(\$\$.*?\$\$|\x01[^\x02]*\x02)', re.S)
@@ -602,22 +790,35 @@ def _footnote_paras(ctx, fn):
     return out or ['']
 
 
+def _table_as_text(r):
+    """각주 안에는 표를 둘 수 없으므로 표의 행마다 한 문단으로 바꾼다(칸은 ` / `로 잇는다)."""
+    rows = []
+    for ln in r.split('\n'):
+        ln = ln.strip()
+        if not ln.startswith('|') or re.fullmatch(r'\|[\s:|-]+\|?', ln): continue
+        cells = [c.strip() for c in re.split(r'(?<!\\)\|', ln.strip('|')) if c.strip()]
+        if cells: rows.append(' / '.join(cells))
+    return rows
+
+
 def footnote_def(label, paras):
-    """[^n]: 첫 문단 / (빈 줄) 4칸 들여쓴 나머지 문단"""
-    # ndhmd4tex 의 각주는 한 문단이다: 글 문단들은 강제 줄바꿈(줄 끝 두 칸)으로 잇고, 그림·표 같은 블록만 따로 들여쓴 문단으로 둔다
-    BLOCK = ('![', '<!--', '|', '\\[', '$$', ':::')
-    chunks = []                                     # [('t', [글 문단들]) | ('b', 블록)]
+    """[^n]: 첫 문단
+    (빈 줄)
+        다음 문단 (네 칸 들여씀)
+    ndhmd4tex 0.28 부터 각주 안에 여러 문단과 quote·목록 같은 환경을 둘 수 있다(문단은 빈 줄, 이어지는 줄은 네 칸 들여쓰기).
+    아직 안 되는 것만 고친다: 표는 행마다 한 문단의 글로, quotation 은 quote 로 바꾼다."""
+    items = []
     for r in paras:
-        if r.startswith(BLOCK): chunks.append(('b', r))
-        elif chunks and chunks[-1][0] == 't': chunks[-1][1].append(r)
-        else: chunks.append(('t', [r]))
-    out = '[^%s]: ' % label
-    for i, (k, v) in enumerate(chunks):
-        if k == 't': txt = '  \n'.join(v)
-        else: txt = v
-        if i == 0: out += txt
-        else: out += '\n\n    ' + txt.replace('\n', '\n    ')
-    return out
+        if not r.strip(): continue
+        if r.startswith('|'): items += _table_as_text(r)
+        else: items.append(re.sub(r'^:::\{quotation\}', ':::{quote}', r))
+    if not items: return '[^%s]:' % label
+    def ind(x): return '\n'.join(('    ' + l) if l.strip() else '' for l in x.split('\n'))
+    first = items[0]
+    if first.startswith((':::', '![', '<!--', '\\[', '$$')):        # 첫 항목이 블록이면 정의 줄은 비워 두고 아래에 들여써 잇는다
+        head, rest = '[^%s]:' % label, items
+        return head + '\n' + '\n\n'.join(ind(x) for x in rest)
+    return '[^%s]: %s' % (label, first) + ''.join('\n\n' + ind(x) for x in items[1:])
 
 
 def endnotes_md(ctx):
@@ -649,6 +850,7 @@ def convert(path, a):
     ctx = Ctx(a, z)
     roots = [ET.fromstring(z.read(name)) for name in section_paths(z)]
     if not roots: raise ValueError('HWPX 에서 sectionN.xml 본문을 찾지 못했습니다')
+    ctx.roots = roots
     root = roots[0]                                           # 쪽 너비·단 수는 첫 구역 설정을 쓴다
     tops = [p for r in roots for p in r.findall(p_('p'))]
     ctx.stats['section'] = len(roots)
@@ -658,6 +860,7 @@ def convert(path, a):
         tw = int(pg.get('width') or 0) - int(mg.get('left') or 0) - int(mg.get('right') or 0) - int(mg.get('gutter') or 0)
         cp = next(root.iter(p_('colPr')), None); cols = int(cp.get('colCount') or 1) if cp is not None else 1
         if tw > 0: ctx.textwidth = tw // max(cols, 1)
+        ctx.body_h = int(pg.get('height') or 0) - sum(int(mg.get(k) or 0) for k in ('top', 'bottom', 'header', 'footer'))     # 본문 높이 (표가 몇 쪽 분량인지 가늠하는 데 씀)
     ctx.tops = tops; ctx.top_index = {id(p): i for i, p in enumerate(tops)}
 
     # 본문 글자 크기(최빈값)
@@ -667,6 +870,7 @@ def convert(path, a):
             n = len(''.join(x.text or '' for x in run.findall(p_('t'))).strip())
             if n: sz[ctx.char_props(run)[0]] += n
     body_size = sz.most_common(1)[0][0] if sz else 1000
+    ctx.body_font = body_size
 
     info = []   # 문단별: parts, text, kind(스타일 종류), 값
     pref = {}
@@ -680,7 +884,7 @@ def convert(path, a):
         ctx.pending_notes = []
         parts = para_parts(ctx, p)
         notes = ctx.pending_notes; ctx.pending_notes = []
-        text = ''.join(s for k, s in parts if k == 't')
+        text = strip_marks(''.join(s for k, s in parts if k == 't'))
         # 같은 문단에 그림과 '그림 N. 설명' 글만 있을 때: 글을 캡션으로
         imgs = [j for j, (k, s) in enumerate(parts) if k == 'b' and s.startswith('![]')]
         if len(imgs) == 1 and text.strip() and len(text.strip()) <= 80 and not any('\x01' in s for k, s in parts if k == 't'):
@@ -750,6 +954,7 @@ def convert(path, a):
         nonlocal cur, buf
         if cur is None: return
         body = '\n\n'.join(b for b in buf if b.strip())
+        if cur == 'quote' and len([b for b in buf if b.strip()]) > 1: cur = 'quotation'      # --style-map 으로 quote 가 된 환경도 문단이 여럿이면 quotation
         fence = ':::'                                   # 중첩해도 ::: 그대로 (ndhmd4tex 는 :::: 를 인정하지 않는다)
         if body.strip(): out.append('%s{%s}\n%s\n%s' % (fence, cur, body, fence))
         cur = None; buf = []
@@ -785,11 +990,19 @@ def convert(path, a):
             continue
         for s in seq: emit(role, s)
     flush()
+    if ctx.tail_notes:                                            # --notes-at-end: 각주·미주 글을 문서 끝에 평문단으로
+        out.append(a.endnote_break)
+        for nm, num, ps in ctx.tail_notes:
+            ps = [x for x in ps if x.strip()] or ['']
+            lab = '(%s %s)' % (nm, num)
+            if ps[0].startswith(('![', '<!--', '|', ':::', '\\[', '$$')): out.append(lab); out.extend(ps)
+            else: out.append(lab + ' ' + ps[0]); out.extend(ps[1:])
     if ctx.endnotes and a.endnotes == 'collect':
         out.append(a.endnote_break)
         out.extend(endnotes_md(ctx))
     md = re.sub(r'\n{3,}', '\n\n', '\n\n'.join(x for x in out)).strip() + '\n'
     md = split_links(md)
+    md = render_marks(md, ctx)
     md = md.replace('\x02\x01', '')                               # 맞붙은 수식은 하나로 ($a$$b$ 는 $$ 로 읽히므로)
     md = re.sub('\x01([^\x02]*)\x02', r'$\1$', md)             # 남은 수식 표지를 인라인 $…$ 로
     pre = []
@@ -804,15 +1017,102 @@ def convert(path, a):
     if getattr(a, 'env_in_preamble', False) and ctx.envs:
         pre += [l for l in env_table_tex(ctx, a.input).splitlines() if l.startswith('\\ifcsname')]
     fm = ''
+    mr = ''
     if getattr(ctx, 'used_endnote', False):       # [^enN]{end} 를 \endnote{…} 로 바꾸고 문서 끝에 미주를 모은다
-        fm += "mappingrule: |\n  notes:\n    end: '\\endnote{%s}'\n"
+        mr += "  notes:\n    end: '\\endnote{%s}'\n"
         pre += ['\\usepackage{endnotes}', '\\AtEndDocument{\\theendnotes}']
+    if ctx.used_wavedash: mr += '  wavedash: 301C\n'      # \~ 를 물결표(U+301C)로
+    if ctx.used_underline:                        # ==밑줄== 은 ndhmd4tex 의 기본 마크업이 아니므로 extra_inline 으로 정의
+        mr += "  extra_inline:\n    - name: underline\n      pattern: '\\=\\=(.+?)\\=\\='\n      template: '\\uline{%s}'\n"
+        pre += ['\\IfPackageLoadedTF{luatexko}{}{\\usepackage[normalem]{ulem}}']
+    if mr: fm += 'mappingrule: |\n' + mr
     if pre:
         fm += 'preamble+: |\n' + ''.join('  %s\n' % l for l in pre)
     if fm:
         md = '---\n' + fm + '---\n\n' + md
     ctx.needs_other = sorted(set(re.findall(r'\\(?:oiint|oiiint)\b', md)))   # amsmath/amssymb 만으로는 안 되는 명령
     return md, ctx
+
+
+def font_report(ctx, src):
+    """실제 글자에 적용된 서체만 모은 보고서(마크다운). hwpx 의 글꼴 목록에는 쓰지 않는 것이 잔뜩 들어 있어서,
+    본문(표·각주·글상자 포함)의 글자 수를 세어 쓰인 것만 남긴다. 글자 종류(한글·영문·한자…)마다 그 칸의 서체를 따른다."""
+    use = collections.Counter(); styles = collections.Counter(); eqfonts = collections.Counter()
+    for root in ctx.roots:
+        for e in root.iter(p_('equation')):
+            eqfonts[(e.get('font') or '', e.get('baseUnit') or '')] += 1
+        for pp in root.iter(p_('p')):
+            styles[pp.get('styleIDRef')] += 1
+            for run in pp.findall(p_('run')):
+                cid = run.get('charPrIDRef')
+                for t in run.findall(p_('t')):
+                    for c in ''.join(t.itertext()):
+                        sc = script_of(c)
+                        if sc: use[(cid, sc)] += 1
+    faces = {}                                   # 서체 -> 집계
+    for (cid, sc), n in use.items():
+        cp = ctx.charpr.get(cid)
+        if cp is None: continue
+        f = ctx.face(cp, sc) or '(이름 없음)'
+        d = faces.setdefault(f, dict(n=0, sc=collections.Counter(), size=collections.Counter(), fl=collections.Counter()))
+        d['n'] += n; d['sc'][sc] += n; d['size'][int(cp.get('height') or 0) / 100] += n
+        for k, v in ctx.cp_flags(cp).items():
+            if v: d['fl'][k] += n
+    out = ['# 사용된 서체', '',
+           '`%s`에서 실제 글자에 적용된 서체만 모았습니다. 글꼴 목록에 있어도 쓰이지 않은 것은 뺐습니다. 글자 수는 공백을 뺀 수이고, 글자 종류(한글·영문·한자…)마다 그 칸에 지정된 서체를 셉니다. 수식 안의 글자는 세지 않았습니다.' % os.path.basename(src), '']
+    if not faces:
+        out.append('글자에 적용된 서체를 찾지 못했습니다.')
+        return '\n'.join(out) + '\n'
+    dfam = ctx.doc_family()
+    out += ['## 서체', '',
+            '계열은 `--sans-fonts`와 기본 규칙으로 정한 것입니다. **문서 본문의 기본 계열: %s** (글자 수가 더 많은 쪽). ' % dfam +
+            ('본문이 rm 이므로 sans 글자는 `_…_`(굵으면 `__…__`)로 표시했습니다.' if dfam == 'rm' else
+             '본문이 sans 이므로 sans 표시(`_…_`)는 쓰지 않았습니다. LaTeX 의 기본 서체를 아래 sans 서체로 맞추세요.'), '',
+            '| 서체 | 계열 | 글자 수 | 글자 종류별 | 크기(pt) : 글자 수 | 굵게 | 기울임 | 밑줄 | 취소선 | 강조점 |', '|---|---|---:|---|---|---:|---:|---:|---:|---:|']
+    for f, d in sorted(faces.items(), key=lambda kv: -kv[1]['n']):
+        scs = ', '.join('%s %d' % (SCRIPT_KO[k], v) for k, v in d['sc'].most_common())
+        sizes = ', '.join('%g : %d' % (k, v) for k, v in sorted(d['size'].items(), key=lambda kv: -kv[1]))
+        out.append('| %s | %s | %d | %s | %s | %d | %d | %d | %d | %d |' % (
+            f, 'sf' if ctx.is_sans(f) else 'rm', d['n'], scs, sizes, d['fl']['B'], d['fl']['I'], d['fl']['U'], d['fl']['X'], d['fl']['D']))
+    rows = []
+    for sid, n in styles.most_common():
+        st = ctx.styles.get(sid)
+        if st is None: continue
+        cp = ctx.charpr.get(st.get('charPrIDRef'))
+        if cp is None: continue
+        fl = ctx.cp_flags(cp)
+        hf, lf = ctx.face(cp, 'hangul'), ctx.face(cp, 'latin')
+        rows.append('| %s | %s | %d | %s | %s | %g | %s |' % (
+            st.get('name'), ctx.envs.get(st.get('name'), '') or '', n, hf, lf if lf != hf else '〃', int(cp.get('height') or 0) / 100,
+            ' '.join(k for k, lab in (('B', '굵게'), ('I', '기울임'), ('U', '밑줄'), ('X', '취소선'), ('D', '강조점')) if fl[k]) and
+            ' '.join(lab for k, lab in (('B', '굵게'), ('I', '기울임'), ('U', '밑줄'), ('X', '취소선'), ('D', '강조점')) if fl[k]) or '-'))
+    if rows:
+        out += ['', '## 쓰인 문단 스타일의 기본 서체', '',
+                '본문의 서식 표시는 이 기본값과 다른 글자에만 붙입니다 (기본이 굵은 스타일의 굵은 글자에는 `**`를 붙이지 않음).', '',
+                '| 스타일 | 환경 | 문단 수 | 한글 서체 | 영문 서체 | 크기(pt) | 서식 |', '|---|---|---:|---|---|---:|---|'] + rows
+    if eqfonts:
+        out += ['', '## 수식 글꼴', '', '| 글꼴 | 기준 크기 | 수식 수 |', '|---|---:|---:|']
+        for (f, u), n in eqfonts.most_common(): out.append('| %s | %s | %d |' % (f or '(지정 없음)', u, n))
+    # LaTeX 참고: 계열·글자 종류별로 가장 많이 쓰인 서체
+    best = {}
+    for (cid, sc), n in use.items():
+        cp = ctx.charpr.get(cid)
+        if cp is None: continue
+        f = ctx.face(cp, sc)
+        if not f: continue
+        key = (sc, 'sf' if ctx.is_sans(f) else 'rm'); best.setdefault(key, collections.Counter())[f] += n
+    cmd = {('hangul', 'rm'): 'setmainhangulfont', ('hangul', 'sf'): 'setsanshangulfont', ('hanja', 'rm'): 'setmainhanjafont',
+           ('hanja', 'sf'): 'setsanshanjafont', ('latin', 'rm'): 'setmainfont', ('latin', 'sf'): 'setsansfont'}
+    lines = ['\\%s{%s}' % (cmd[k], c.most_common(1)[0][0]) for k, c in sorted(best.items()) if k in cmd]
+    if lines:
+        out += ['', '## LaTeX 참고', '',
+                '계열(rm/sf)과 글자 종류별로 가장 많이 쓰인 서체입니다. 명령 이름은 luatexko·kotex 계열 기준의 예시이니 환경에 맞게 고쳐 쓰세요.', '',
+                '```latex'] + lines + ['```']
+    if ctx.stats.get('sf_drops_italic') or ctx.stats.get('rm_in_sf_skipped'):
+        out += ['', '## 표시하지 못한 서식', '']
+        if ctx.stats.get('sf_drops_italic'): out.append('- sans 이면서 기울임 %d곳: sans 기울임 문법이 없어 기울임은 버렸습니다.' % ctx.stats['sf_drops_italic'])
+        if ctx.stats.get('rm_in_sf_skipped'): out.append('- sans 스타일 안의 rm 글자 %d곳: 표시 문법이 없어 그대로 둡니다.' % ctx.stats['rm_in_sf_skipped'])
+    return '\n'.join(out) + '\n'
 
 
 def env_table_tex(ctx, src):
@@ -911,9 +1211,23 @@ def main():
     ap.add_argument('--endnotes', choices=['ref', 'collect', 'drop'], default='ref',
                     help='ref: 본문에 [^en1]{end}, 정의는 문단 뒤에 내고 front matter 에 \\endnote 설정을 넣는다 (ndhmd4tex) / '
                          'collect: 번호 붙인 미주를 문서 끝 별면에 모아 낸다 (본문에 표지 없음) / drop: 버린다')
-    ap.add_argument('--endnote-break', default='\\newpage', help='collect 일 때 미주 앞에 넣을 줄 (기본 \\newpage)')
+    ap.add_argument('--no-table-conversion', '--table-conversion-false', dest='no_table_conversion', action='store_true',
+                    help='표를 변환하려 하지 않고 칸 안의 글만 칸 순서대로 평문단으로 남긴다')
+    ap.add_argument('--notes-at-end', action='store_true',
+                    help='각주·미주를 마크업하지 않고, 본문에는 (각주 N)·(미주 N) 자리표시만 두고 글은 문서 끝에 평문단으로 모은다 (--footnotes·--endnotes 무시)')
+    ap.add_argument('--endnote-break', default='\\newpage', help='collect 또는 --notes-at-end 일 때 모은 글 앞에 넣을 줄 (기본 \\newpage)')
     ap.add_argument('--keep-linebreaks', action='store_true',
                     help='한글의 강제 줄바꿈(Shift+Enter)을 마크다운 줄바꿈(줄 끝 두 칸)으로 남긴다 (기본: 공백으로 이어 붙임)')
+    ap.add_argument('--no-inline-marks', dest='inline_marks', action='store_false',
+                    help='글자 서식(굵게·기울임·취소선·밑줄·강조점·sans 서체)을 인라인 마크업으로 내지 않는다')
+    ap.add_argument('--sans-fonts', metavar='NAMES', default='',
+                    help='sans(_글_)로 볼 서체 이름 조각을 쉼표로 더 지정 (기본: 돋움·고딕·굴림·Sans·Arial 등이 들어간 이름)')
+    ap.add_argument('--font-report', metavar='FILE', help='실제로 쓰인 서체만 모은 보고서를 쓸 파일 (기본: 출력파일.fonts.md)')
+    ap.add_argument('--long-table', type=float, default=0.7, metavar='F',
+                    help='내용만으로 조판했을 때(칸 너비에 글자를 채워 센 줄 수) 추정 높이가 본문 높이의 F 배 이상이면 '
+                         '표 끝에 {env=long} 을 붙인다 (기본 0.7, 0 이면 끔)')
+    ap.add_argument('--long-table-rows', type=int, default=30, metavar='N',
+                    help='행이 N 개 이상이어도 {env=long} 을 붙인다 (기본 30, 0 이면 끔)')
     ap.add_argument('--no-para-numbers', dest='para_numbers', action='store_false',
                     help='한글의 자동 문단 번호({1}. 꼴)를 넣지 않는다')
     ap.add_argument('--keep-cell-text', action='store_true', default=True)
@@ -928,6 +1242,10 @@ def main():
         ep = a.env_table or os.path.splitext(a.output)[0] + '.envs.tex'
         open(ep, 'w', encoding='utf8').write(env_table_tex(ctx, a.input))
         print('환경 대응표:', ep, file=sys.stderr)
+    if a.font_report or a.output:
+        fp = a.font_report or os.path.splitext(a.output)[0] + '.fonts.md'
+        open(fp, 'w', encoding='utf8').write(font_report(ctx, a.input))
+        print('서체 보고서:', fp, file=sys.stderr)
     if a.report or a.output:
         print('통계:', dict(ctx.stats), file=sys.stderr)
         print('문단 스타일:', dict(ctx.used_styles), file=sys.stderr)
