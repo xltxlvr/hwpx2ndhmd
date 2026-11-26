@@ -181,6 +181,7 @@ python hwpx2ndhmd.py --version
 | `gen/gen_tables.py` | rhwp 의 `symbols.rs`에서 `hwpeq_tables.py`를 만드는 생성기 (실행에만 `pylatexenc` 필요) |
 | `gen/gen_mathsyntax.py` | `mathsyntax.md`를 만드는 생성기 |
 | `mathsyntax.md` | 한컴 수식 → LaTeX 대조표 |
+| `CHANGELOG.md` | 변경 내역 |
 | `LICENSE` | 이 저장소의 MIT 라이선스 (Copyright (c) 2026 Nova de Hi) |
 | `LICENSE.rhwp` | rhwp 의 MIT 라이선스 전문 |
 
