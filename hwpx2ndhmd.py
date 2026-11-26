@@ -12,7 +12,7 @@ import xml.etree.ElementTree as ET
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import hwpeq
 
-__version__ = '0.0.13'
+__version__ = '0.0.14'
 
 PN = 'http://www.hancom.co.kr/hwpml/2011/paragraph'
 HN = 'http://www.hancom.co.kr/hwpml/2011/head'
@@ -802,23 +802,27 @@ def _table_as_text(r):
 
 
 def footnote_def(label, paras):
-    """[^n]: 첫 문단
-    (빈 줄)
-        다음 문단 (네 칸 들여씀)
-    ndhmd4tex 0.28 부터 각주 안에 여러 문단과 quote·목록 같은 환경을 둘 수 있다(문단은 빈 줄, 이어지는 줄은 네 칸 들여쓰기).
-    아직 안 되는 것만 고친다: 표는 행마다 한 문단의 글로, quotation 은 quote 로 바꾼다."""
+    """[^n]: 첫 문단 \\
+        다음 문단 (네 칸 들여씀, 앞 문단 끝에 \\)
+    ndhmd4tex 의 각주는 여러 줄을 받지만 빈 줄은 각주의 끝으로 읽는다. 그래서 문단은 줄로 나누고 이어지는 줄은 네 칸 들여쓰며,
+    문단 경계에는 \\ (LaTeX 줄바꿈)를 단다. 빈 줄은 쓰지 않는다.
+    표는 행마다 한 문단의 글로, quotation 은 quote 로 바꾸고, 그 안의 문단도 빈 줄 없이 \\ 로 잇는다."""
     items = []
     for r in paras:
         if not r.strip(): continue
         if r.startswith('|'): items += _table_as_text(r)
         else: items.append(re.sub(r'^:::\{quotation\}', ':::{quote}', r))
-    if not items: return '[^%s]:' % label
-    def ind(x): return '\n'.join(('    ' + l) if l.strip() else '' for l in x.split('\n'))
-    first = items[0]
-    if first.startswith((':::', '![', '<!--', '\\[', '$$')):        # 첫 항목이 블록이면 정의 줄은 비워 두고 아래에 들여써 잇는다
-        head, rest = '[^%s]:' % label, items
-        return head + '\n' + '\n\n'.join(ind(x) for x in rest)
-    return '[^%s]: %s' % (label, first) + ''.join('\n\n' + ind(x) for x in items[1:])
+    BLK = (':::', '![', '<!--', '\\[', '$$')
+    lines = []
+    for k, r in enumerate(items):
+        ls = [l for l in r.split('\n') if l.strip()]               # 문단 안의 빈 줄은 없앤다 (인용·수식 블록 포함)
+        if r.startswith(':::') and len(ls) > 2:                   # 인용 환경: 안의 문단은 \\ 로 잇고 틀은 그대로
+            ls = [ls[0]] + [l + ' \\\\' for l in ls[1:-2]] + ls[-2:]
+        nxt = items[k + 1] if k + 1 < len(items) else None
+        if nxt is not None and not r.startswith(BLK) and not nxt.startswith(BLK): ls[-1] += ' \\\\'   # 글과 글 사이만 \\
+        lines += ls
+    if not lines: return '[^%s]:' % label
+    return '[^%s]: %s' % (label, lines[0]) + ''.join('\n    ' + l for l in lines[1:])
 
 
 def endnotes_md(ctx):
