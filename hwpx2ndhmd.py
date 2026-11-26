@@ -7,12 +7,12 @@
  - 글상자·표 셀 글 등 인용 형태로 남기는 것은 :::{quote} 로 낸다
 수식은 hwpeq.py (rhwp 규칙 기반) 가 LaTeX 로 바꾼다.
 """
-import sys, os, re, io, json, zipfile, argparse, collections
+import sys, os, re, io, json, zipfile, argparse, collections, posixpath
 import xml.etree.ElementTree as ET
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import hwpeq
 
-__version__ = '0.0.1'
+__version__ = '0.0.4'
 
 PN = 'http://www.hancom.co.kr/hwpml/2011/paragraph'
 HN = 'http://www.hancom.co.kr/hwpml/2011/head'
@@ -151,6 +151,47 @@ LABEL_RE = re.compile(r'^\s*[\[(<《]?\s*(?:그림|도|Figure|Fig\.?)\s*\d+(?:[-
 
 def clean_caption(t):
     return re.sub(r'\s+', ' ', re.sub(r'[\[\]]', '', t)).strip()
+
+
+def section_paths(z):
+    """HWPX 본문 구역(Contents/sectionN.xml)을 패키지(content.hpf)의 읽기 순서대로 돌려준다.
+    목록에서 빠진 구역은 파일 이름의 번호순으로 뒤에 붙인다."""
+    package_path = 'Contents/content.hpf'
+    names = set(z.namelist())
+    section_re = re.compile(r'(?:^|/)section(\d+)\.xml$')
+    ordered = []
+    try:
+        package = ET.fromstring(z.read(package_path))
+        OPF = '{http://www.idpf.org/2007/opf/}'
+        manifest = {}
+        for item in package.iter(OPF + 'item'):
+            href = item.get('href')
+            if not href: continue
+            path = posixpath.normpath(href.lstrip('/') if href.startswith('/')
+                                      else posixpath.join(posixpath.dirname(package_path), href))
+            manifest[item.get('id')] = path
+        for itemref in package.iter(OPF + 'itemref'):
+            path = manifest.get(itemref.get('idref'))
+            if path in names and section_re.search(path):
+                ordered.append(path)
+    except (KeyError, ET.ParseError):
+        pass
+    found = sorted((int(m.group(1)), n) for n in names for m in [section_re.search(n)] if m)
+    ordered += [n for _, n in found if n not in ordered]
+    return list(dict.fromkeys(ordered))
+
+
+def normalize_para_text(s, keep_breaks=False):
+    """공백 정리. keep_breaks 이면 줄 끝 두 칸 이상(한글의 강제 줄바꿈)을 마크다운 줄바꿈으로 남긴다.
+    아니면 예전처럼 줄바꿈 표지도 한 칸 공백으로 눌러 버린다."""
+    if not keep_breaks:
+        return re.sub(r'[ \t]{2,}', ' ', s)
+    lines = []
+    for line in s.split('\n'):
+        trailing = len(line) - len(line.rstrip(' \t'))
+        body = re.sub(r'[ \t]{2,}', ' ', line[:-trailing] if trailing else line)
+        lines.append(body + ('  ' if trailing >= 2 else ''))
+    return '\n'.join(lines)
 
 
 def image_caption(ctx, pic, p):
@@ -555,16 +596,28 @@ def _footnote_paras(ctx, fn):
         for k, s in para_parts(ctx, p):
             if k == 't': acc += s
             else:
-                if acc.strip(): out.append(lsafe(re.sub(r'[ \t]{2,}', ' ', acc.replace('  \n', ' ')).strip()))
+                if acc.strip(): out.append(lsafe(normalize_para_text(acc if ctx.a.keep_linebreaks else acc.replace('  \n', ' '), ctx.a.keep_linebreaks).strip()))
                 acc = ''; out.append(s)
-        if acc.strip(): out.append(lsafe(re.sub(r'[ \t]{2,}', ' ', acc.replace('  \n', ' ')).strip()))
+        if acc.strip(): out.append(lsafe(normalize_para_text(acc if ctx.a.keep_linebreaks else acc.replace('  \n', ' '), ctx.a.keep_linebreaks).strip()))
     return out or ['']
 
 
 def footnote_def(label, paras):
     """[^n]: 첫 문단 / (빈 줄) 4칸 들여쓴 나머지 문단"""
-    head, rest = paras[0], paras[1:]
-    return '[^%s]: %s' % (label, head) + ''.join('\n\n    ' + r.replace('\n', '\n    ') for r in rest)
+    # ndhmd4tex 의 각주는 한 문단이다: 글 문단들은 강제 줄바꿈(줄 끝 두 칸)으로 잇고, 그림·표 같은 블록만 따로 들여쓴 문단으로 둔다
+    BLOCK = ('![', '<!--', '|', '\\[', '$$', ':::')
+    chunks = []                                     # [('t', [글 문단들]) | ('b', 블록)]
+    for r in paras:
+        if r.startswith(BLOCK): chunks.append(('b', r))
+        elif chunks and chunks[-1][0] == 't': chunks[-1][1].append(r)
+        else: chunks.append(('t', [r]))
+    out = '[^%s]: ' % label
+    for i, (k, v) in enumerate(chunks):
+        if k == 't': txt = '  \n'.join(v)
+        else: txt = v
+        if i == 0: out += txt
+        else: out += '\n\n    ' + txt.replace('\n', '\n    ')
+    return out
 
 
 def endnotes_md(ctx):
@@ -580,9 +633,9 @@ def endnotes_md(ctx):
             for k, s in para_parts(ctx, p):
                 if k == 't': acc += s
                 else:
-                    if acc.strip(): seq.append(lsafe(re.sub(r'[ \t]{2,}', ' ', acc).strip()))
+                    if acc.strip(): seq.append(lsafe(normalize_para_text(acc, ctx.a.keep_linebreaks).strip()))
                     acc = ''; seq.append(s)
-            if acc.strip(): seq.append(lsafe(re.sub(r'[ \t]{2,}', ' ', acc).strip()))
+            if acc.strip(): seq.append(lsafe(normalize_para_text(acc, ctx.a.keep_linebreaks).strip()))
         if seq and not seq[0].startswith(('![', '<!--', '|')): seq[0] = label + ' ' + seq[0]
         else: seq.insert(0, label)
         out.extend(seq)
@@ -594,9 +647,12 @@ def endnotes_md(ctx):
 def convert(path, a):
     z = zipfile.ZipFile(path)
     ctx = Ctx(a, z)
-    root = ET.fromstring(z.read('Contents/section0.xml'))
-    tops = root.findall(p_('p'))
-    sp = next(root.iter(p_('secPr')), None)                  # 본문 너비 = 쪽 너비 - 좌우 여백 (단이 여럿이면 단 수로 나눔)
+    roots = [ET.fromstring(z.read(name)) for name in section_paths(z)]
+    if not roots: raise ValueError('HWPX 에서 sectionN.xml 본문을 찾지 못했습니다')
+    root = roots[0]                                           # 쪽 너비·단 수는 첫 구역 설정을 쓴다
+    tops = [p for r in roots for p in r.findall(p_('p'))]
+    ctx.stats['section'] = len(roots)
+    sp = next((e for r in roots for e in r.iter(p_('secPr'))), None)                  # 본문 너비 = 쪽 너비 - 좌우 여백 (단이 여럿이면 단 수로 나눔)
     if sp is not None and sp.find(p_('pagePr')) is not None:
         pg = sp.find(p_('pagePr')); mg = pg.find(p_('margin'))
         tw = int(pg.get('width') or 0) - int(mg.get('left') or 0) - int(mg.get('right') or 0) - int(mg.get('gutter') or 0)
@@ -709,7 +765,7 @@ def convert(path, a):
     for i, ((p, text, parts), role) in enumerate(zip(info, roles)):
         if i in pref and (text.strip() or any(k == 'b' for k, _ in parts)):
             parts = [('t', pref[i] + ' ')] + list(parts); text = pref[i] + ' ' + text
-        txt = re.sub(r'[ \t]{2,}', ' ', text).strip()
+        txt = normalize_para_text(text, ctx.a.keep_linebreaks).strip()
         blocks = [s for k, s in parts if k == 'b']
         if role[0] == 'h' and txt:
             emit(('plain',), '#' * role[1] + ' ' + ' '.join(txt.split()))
@@ -720,9 +776,9 @@ def convert(path, a):
         for k, s in parts:
             if k == 't': acc += s
             else:
-                if acc.strip(): seq.append(lsafe(re.sub(r'[ \t]{2,}', ' ', acc).strip()))
+                if acc.strip(): seq.append(lsafe(normalize_para_text(acc, ctx.a.keep_linebreaks).strip()))
                 acc = ''; seq.append(s)
-        if acc.strip(): seq.append(lsafe(re.sub(r'[ \t]{2,}', ' ', acc).strip()))
+        if acc.strip(): seq.append(lsafe(normalize_para_text(acc, ctx.a.keep_linebreaks).strip()))
         if not seq:
             if role[0] != 'env': flush()
             if role[0] == 'plain' and out and out[-1] != '': out.append('')   # 빈 문단은 한 줄 띄움으로
@@ -856,6 +912,8 @@ def main():
                     help='ref: 본문에 [^en1]{end}, 정의는 문단 뒤에 내고 front matter 에 \\endnote 설정을 넣는다 (ndhmd4tex) / '
                          'collect: 번호 붙인 미주를 문서 끝 별면에 모아 낸다 (본문에 표지 없음) / drop: 버린다')
     ap.add_argument('--endnote-break', default='\\newpage', help='collect 일 때 미주 앞에 넣을 줄 (기본 \\newpage)')
+    ap.add_argument('--keep-linebreaks', action='store_true',
+                    help='한글의 강제 줄바꿈(Shift+Enter)을 마크다운 줄바꿈(줄 끝 두 칸)으로 남긴다 (기본: 공백으로 이어 붙임)')
     ap.add_argument('--no-para-numbers', dest='para_numbers', action='store_false',
                     help='한글의 자동 문단 번호({1}. 꼴)를 넣지 않는다')
     ap.add_argument('--keep-cell-text', action='store_true', default=True)

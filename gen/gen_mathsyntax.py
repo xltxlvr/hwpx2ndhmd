@@ -131,6 +131,8 @@ EXAMPLES = [
   ('a~b', '`~` : 공백'),
   ('"hello" x', '따옴표 안은 글자 그대로'),
   ('x 가 y', '한글 등은 `\\text{…}`'),
+  ('95 %', 'LaTeX 특수문자 `%` `$`는 수식 안에서 `\\%` `\\$`로 이스케이프 (ndhmd4tex 는 수식 안을 그대로 둔다)'),
+  ('"50% of $x_1$"', '따옴표 글 안의 `% $ # & _ ^ ~ { } \\`도 이스케이프'),
   ('a -> b', ''),
   ('a rarrow b', ''),
   ('a lrarrow b', ''),
@@ -147,7 +149,7 @@ def main():
     A = out.append
     A('# 수학식 표현 대조표 (한컴 수식 → LaTeX)')
     A('')
-    A('hwpx2ndhmd 0.0.1 (`hwpeq.py`)이 한컴 수식 편집기의 스크립트를 LaTeX로 바꾸는 방식을 정리한 표입니다.')
+    A('hwpx2ndhmd 0.0.4 (`hwpeq.py`)이 한컴 수식 편집기의 스크립트를 LaTeX로 바꾸는 방식을 정리한 표입니다.')
     A('"변환 결과" 열은 손으로 쓴 것이 아니라 `gen/gen_mathsyntax.py`가 `hwpeq.py`를 실제로 돌려 만든 값입니다.')
     A('')
     A('명령 이름의 뼈대(그리스 문자·기호·연산자·화살표·괄호·함수 표)는 [rhwp](https://github.com/edwardkim/rhwp)(MIT License, Copyright (c) 2025-2026 Edward Kim)의 `symbols.rs`에서 가져왔고, 첨자 인자의 범위나 `over`의 결합 범위 같은 규칙도 rhwp의 파서를 따랐습니다. 한컴 화면과 일대일로 비교해 본 것은 아닙니다.')

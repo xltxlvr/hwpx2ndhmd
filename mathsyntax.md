@@ -1,6 +1,6 @@
 # 수학식 표현 대조표 (한컴 수식 → LaTeX)
 
-hwpx2ndhmd 0.0.1 (`hwpeq.py`)이 한컴 수식 편집기의 스크립트를 LaTeX로 바꾸는 방식을 정리한 표입니다.
+hwpx2ndhmd 0.0.4 (`hwpeq.py`)이 한컴 수식 편집기의 스크립트를 LaTeX로 바꾸는 방식을 정리한 표입니다.
 "변환 결과" 열은 손으로 쓴 것이 아니라 `gen/gen_mathsyntax.py`가 `hwpeq.py`를 실제로 돌려 만든 값입니다.
 
 명령 이름의 뼈대(그리스 문자·기호·연산자·화살표·괄호·함수 표)는 [rhwp](https://github.com/edwardkim/rhwp)(MIT License, Copyright (c) 2025-2026 Edward Kim)의 `symbols.rs`에서 가져왔고, 첨자 인자의 범위나 `over`의 결합 범위 같은 규칙도 rhwp의 파서를 따랐습니다. 한컴 화면과 일대일로 비교해 본 것은 아닙니다.
@@ -171,6 +171,8 @@ hwpx2ndhmd 0.0.1 (`hwpeq.py`)이 한컴 수식 편집기의 스크립트를 LaTe
 | <code>a~b</code> | <code>a\ b</code> | `~` : 공백 |
 | <code>"hello" x</code> | <code>\text{hello}x</code> | 따옴표 안은 글자 그대로 |
 | <code>x 가 y</code> | <code>x\text{가}y</code> | 한글 등은 `\text{…}` |
+| <code>95 %</code> | <code>95\%</code> | LaTeX 특수문자 `%` `$`는 수식 안에서 `\%` `\$`로 이스케이프 (ndhmd4tex 는 수식 안을 그대로 둔다) |
+| <code>"50% of $x_1$"</code> | <code>\text{50\% of \$x\_1\$}</code> | 따옴표 글 안의 `% $ # & _ ^ ~ { } \`도 이스케이프 |
 | <code>a -&gt; b</code> | <code>a\to b</code> |  |
 | <code>a rarrow b</code> | <code>a\rightarrow b</code> |  |
 | <code>a lrarrow b</code> | <code>a\leftrightarrow b</code> |  |

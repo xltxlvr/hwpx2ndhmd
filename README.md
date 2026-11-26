@@ -2,7 +2,7 @@
 
 한글(HWP) 문서 `.hwpx`를 (ndh)md 로 바꾸는 도구입니다. [ndhmd4tex](https://github.com/xltxlvr/ndhmd4tex)로 PDF를 만드는 작업의 앞단으로 쓰려고 만들었습니다.
 
-**버전 0.0.1** — 프로토타입입니다. 몇 가지 문서(수학 학습지, 시험지, 고전 수필 모음)로 다듬은 것이라, 다른 종류의 문서에서는 어색한 결과가 나올 수 있습니다.
+**버전 0.0.4** — 프로토타입입니다. 몇 가지 문서(수학 학습지, 시험지, 고전 수필 모음)로 다듬은 것이라, 다른 종류의 문서에서는 어색한 결과가 나올 수 있습니다.
 
 ## 하는 일
 
@@ -17,7 +17,7 @@ hwpx 는 zip 안에 XML 이 들어 있는 형식입니다. 이 도구는 그 XML
 
 ## 요구 사항
 
-- Python 3 (0.0.1 은 Python 3.13 에서 시험했습니다)
+- Python 3 (0.0.4 은 Python 3.13 에서 시험했습니다)
 - 표준 라이브러리만으로 동작합니다.
 - [Pillow](https://python-pillow.org/)는 있으면 씁니다. 없어도 24비트 BMP 는 순수 파이썬으로 PNG 로 바꿉니다. 그 밖의 BMP 는 원본 그대로 저장하고 경고합니다(`--no-pillow`로 Pillow 를 쓰지 않게 할 수 있습니다).
 
@@ -105,9 +105,13 @@ python hwpx2ndhmd.py --version
 - 그렇지 않은 표는 `<!-- TABLE 3x4: 변환 불가(병합/그림 포함) -->` 한 줄로 자리만 표시하고, 셀의 글을 `:::{quote}`로 이어 붙입니다(`--no-cell-text`면 자리만).
 - 글상자 같은 도형은 안의 글을 `:::{quote}`로 내고 `<!-- SHAPE:textbox -->` 표시를 붙입니다. 글이 없는 빈 도형은 `--show-empty-shapes`를 줄 때만 표시합니다.
 
+### 여러 구역
+
+구역(섹션)이 여러 개인 문서는 `content.hpf` 의 읽기 순서대로 모든 구역을 이어서 변환합니다. 쪽 너비(그림 폭 비율에 쓰임)는 첫 구역 기준입니다.
+
 ### 각주와 미주
 
-- **각주**는 pandoc 방식입니다. 본문에는 `[^번호]`, 정의는 그 문단 바로 뒤에 `[^번호]: 글`로 냅니다. 여러 문단인 각주는 둘째 문단부터 4칸 들여씁니다. 번호는 한글의 각주 번호를 그대로 씁니다. `--footnotes inline`은 `^[글]`, `--footnotes drop`은 버립니다.
+- **각주**는 pandoc 방식입니다. 본문에는 `[^번호]`, 정의는 그 문단 바로 뒤에 `[^번호]: 글`로 냅니다. ndhmd4tex 의 각주는 한 문단이므로, 한글 각주 안의 문단 구분은 강제 줄바꿈(줄 끝 두 칸)으로 잇습니다. 각주 안의 그림·표 같은 블록만 4칸 들여쓴 문단으로 따로 둡니다. 미주(`[^en1]: …`)도 같습니다. 번호는 한글의 각주 번호를 그대로 씁니다. `--footnotes inline`은 `^[글]`, `--footnotes drop`은 버립니다.
 - **미주**는 각주처럼 본문에 `[^en1]{end}` 를 두고, 정의 `[^en1]: …` 는 그 문단 바로 뒤에 냅니다(이름은 한글의 미주 번호 앞에 `en`을 붙인 것). 미주가 하나라도 있으면 front matter 에 아래 설정을 자동으로 넣습니다. 그러면 ndhmd4tex 가 `{end}` 를 `\endnote{…}` 로 바꾸고 문서 끝에 `\theendnotes` 로 모읍니다. 미주 번호 옆의 아주 작은 장식 그림(폭 약 0.8 cm 이하)은 뺍니다.
 
   ```yaml
@@ -161,6 +165,7 @@ python hwpx2ndhmd.py --version
 | `--footnotes {ref,inline,drop}` | `ref` | 각주 출력 방식 |
 | `--endnotes {ref,collect,drop}` | `ref` | `[^en1]{end}` 표지와 정의 / 문서 끝에 번호만 모음 / 버림 |
 | `--endnote-break S` | `\newpage` | `collect` 일 때 미주 앞 줄 |
+| `--keep-linebreaks` | | 한글의 강제 줄바꿈(Shift+Enter)을 마크다운 줄바꿈(줄 끝 두 칸)으로 남김. 기본은 공백으로 이어 붙임 |
 | `--no-para-numbers` | | 자동 문단 번호를 붙이지 않음 |
 | `--no-cell-text` | | 변환 못 한 표의 셀 글을 내지 않음 |
 | `--show-empty-shapes` | | 글 없는 도형도 자리 표시 |
@@ -176,6 +181,7 @@ python hwpx2ndhmd.py --version
 | `gen/gen_tables.py` | rhwp 의 `symbols.rs`에서 `hwpeq_tables.py`를 만드는 생성기 (실행에만 `pylatexenc` 필요) |
 | `gen/gen_mathsyntax.py` | `mathsyntax.md`를 만드는 생성기 |
 | `mathsyntax.md` | 한컴 수식 → LaTeX 대조표 |
+| `LICENSE` | 이 저장소의 MIT 라이선스 (Copyright (c) 2026 Nova de Hi) |
 | `LICENSE.rhwp` | rhwp 의 MIT 라이선스 전문 |
 
 ## 아직 안 된 것, 확인하지 못한 것
@@ -193,4 +199,4 @@ python hwpx2ndhmd.py --version
 ## 감사와 라이선스
 
 - 한컴 수식의 명령 이름 표, 토큰 분리와 첨자·`over` 규칙은 [rhwp](https://github.com/edwardkim/rhwp)(MIT License, Copyright (c) 2025-2026 Edward Kim)를 참고하거나 가져왔습니다. 라이선스 전문은 `LICENSE.rhwp`에 있습니다.
-- MIT 라이선스로 배포합니다.
+- 이 저장소는 MIT 라이선스입니다(`LICENSE`).

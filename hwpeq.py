@@ -10,7 +10,7 @@ import re, sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from hwpeq_tables import TABLES as T
 
-__version__ = '0.0.1'
+__version__ = '0.0.4'
 
 UNKNOWN = set()          # 해석하지 못한 명령 (호출한 쪽에서 보고용)
 WARN = []                # (수식 원문, 메시지) — \left/\right 짝 보정 등 호출한 쪽에서 보고용
@@ -61,6 +61,15 @@ def is_keyword(s):
 
 DELIM_UNI = {'∥': r'\Vert', '‖': r'\Vert', '∣': '|', '｜': '|', '⟨': r'\langle', '〈': r'\langle', '⟩': r'\rangle', '〉': r'\rangle',
              '⌊': r'\lfloor', '⌋': r'\rfloor', '⌈': r'\lceil', '⌉': r'\rceil', '（': '(', '）': ')', '［': '[', '］': ']'}
+
+
+_TEXT_ESC = {'\\': r'\textbackslash{}', '{': r'\{', '}': r'\}', '%': r'\%', '$': r'\$', '#': r'\#', '&': r'\&',
+             '_': r'\_', '^': r'\^{}', '~': r'\textasciitilde{}'}
+
+
+def text_escape(v):
+    """\\text{…} 안에 들어가는 글(따옴표 글·기타 문자)의 LaTeX 특수문자를 이스케이프한다."""
+    return ''.join(_TEXT_ESC.get(c, c) for c in v)
 
 
 class Toks(list):
@@ -200,8 +209,8 @@ class P:
         if (k, v) == ('ch', '{'): return G(s.group())
         s.i += 1
         if k == 'num': return v
-        if k == 'txt': return r'\text{' + v + '}'
-        if k == 'na': return r'\text{' + v + '}'
+        if k == 'txt': return r'\text{' + text_escape(v) + '}'
+        if k == 'na': return r'\text{' + text_escape(v) + '}'
         if k == 'arrow': return r'\to ' if v == '->' else r'\leftarrow '
         if k == 'id': return s.wrap_font(v)
         if k == 'ch':
@@ -210,6 +219,8 @@ class P:
             if v == '#': return r'\\'
             if v == '&': return r'\quad '        # 구조 밖의 & 는 열 구분이 아니라 탭 간격 (rhwp: SpaceKind::Tab)
             if v in '{}': return ''
+            if v == '%': return r'\%'              # 수식 안의 % 는 ndhmd4tex 도 손대지 않으므로 직접 이스케이프 (LaTeX 주석 방지)
+            if v == '$': return r'\$'
             return v
         # ---- 명령
         up = v.upper(); lo = v.lower()
