@@ -12,7 +12,7 @@ import xml.etree.ElementTree as ET
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import hwpeq
 
-__version__ = '0.0.14'
+__version__ = '0.0.15'
 
 PN = 'http://www.hancom.co.kr/hwpml/2011/paragraph'
 HN = 'http://www.hancom.co.kr/hwpml/2011/head'
@@ -115,7 +115,7 @@ class Ctx:
             for ph in nm.findall(h_('paraHead')):
                 lv[int(ph.get('level') or 1)] = (ph.text or '', ph.get('numFormat') or 'DIGIT', int(ph.get('start') or 1))
             self.numdefs[nm.get('id')] = lv
-        self.in_note = False; self.used_endnote = False
+        self.in_note = False; self.in_fn = False; self.used_endnote = False
         self.tail_notes = []                            # --notes-at-end: (이름, 번호, 문단들)
         self.pending_notes = []                         # 지금 문단의 각주 정의 (문단 다음에 낸다)
         self.fn_labels = set()
@@ -618,8 +618,80 @@ def is_long_table(ctx, t, nrows):
     return False
 
 
+def _dw(s):
+    """ndhmd4tex 의 grid 표가 세는 화면 칸 수: 전각(W·F)은 2, 나머지는 1"""
+    return sum(2 if unicodedata.east_asian_width(c) in 'WF' else 1 for c in s)
+
+
+def _wrap(text, width):
+    """공백에서만 줄을 나눈다 (ndhmd4tex 가 줄을 공백 하나로 다시 잇기 때문). 한 낱말이 넘치면 그대로 둔다."""
+    lines, cur = [], ''
+    for tok in text.split(' '):
+        if cur and _dw(cur) + 1 + _dw(tok) > width: lines.append(cur); cur = tok
+        else: cur = tok if not cur else cur + ' ' + tok
+    return lines + [cur] if cur else lines
+
+
+def grid_table(ctx, t, rows):
+    """병합 셀이 있는 표 -> pandoc grid 표 문자열 (ndhmd4tex 가 \\SetCell[r=,c=] 로 바꾼다). 못 만들면 None."""
+    nr, nc = int(t.get('rowCnt') or 0), int(t.get('colCnt') or 0)
+    if not nr or not nc or nc > ctx.a.grid_max_cols: return None
+    cells, cover = [], [[0] * nc for _ in range(nr)]
+    for r in rows:
+        for c in r:
+            ad, sp = c.find(p_('cellAddr')), c.find(p_('cellSpan'))
+            if ad is None or sp is None: return None
+            r0, c0, rs, cs = int(ad.get('rowAddr')), int(ad.get('colAddr')), int(sp.get('rowSpan')), int(sp.get('colSpan'))
+            if r0 + rs > nr or c0 + cs > nc: return None
+            for y in range(r0, r0 + rs):
+                for x in range(c0, c0 + cs): cover[y][x] += 1
+            paras = [p.replace('\x02\x01', '') for p in cell_paras(ctx, c)]
+            cells.append(dict(r=r0, c=c0, rs=rs, cs=cs, paras=paras))
+    if any(v != 1 for row in cover for v in row): return None      # 칸이 빠지거나 겹치면 포기
+    B = max(14, 96 // nc)                                              # 한 칸의 목표 너비(화면 칸)
+    for cl in cells:
+        w = B * cl['cs'] + (cl['cs'] - 1)
+        cl['lines'] = []
+        for k, p in enumerate(cl['paras']):
+            if k: cl['lines'].append('')
+            cl['lines'] += _wrap(p, w - 2) or ['']
+    W = [3] * nc                                                       # 칸 안쪽 너비
+    for cl in sorted(cells, key=lambda x: x['cs']):
+        need = max([_dw(l) for l in cl['lines']] + [1]) + 2
+        have = sum(W[cl['c']:cl['c'] + cl['cs']]) + cl['cs'] - 1
+        if have < need: W[cl['c'] + cl['cs'] - 1] += need - have
+    H = [1] * nr
+    for cl in sorted(cells, key=lambda x: x['rs']):
+        have = sum(H[cl['r']:cl['r'] + cl['rs']]) + cl['rs'] - 1
+        if have < len(cl['lines']): H[cl['r'] + cl['rs'] - 1] += len(cl['lines']) - have
+    X = [0]
+    for w in W: X.append(X[-1] + w + 1)
+    Y = [0]
+    for h in H: Y.append(Y[-1] + h + 1)
+    hdr = next((i for i in range(1, nr + 1) if not any(cl['r'] < i < cl['r'] + cl['rs'] for cl in cells)), nr)   # 첫 행(과 그 행에 걸친 병합)이 머리글
+    cv = [[' '] * (X[-1] + 1) for _ in range(Y[-1] + 1)]
+    for cl in cells:
+        x0, x1, y0, y1 = X[cl['c']], X[cl['c'] + cl['cs']], Y[cl['r']], Y[cl['r'] + cl['rs']]
+        for x in range(x0, x1 + 1):
+            cv[y0][x] = '=' if y0 == Y[hdr] and hdr < nr else '-'
+            cv[y1][x] = '=' if y1 == Y[hdr] and hdr < nr else '-'
+        for y in range(y0, y1 + 1): cv[y][x0] = cv[y][x1] = '|'
+    for cl in cells:
+        x0, x1, y0, y1 = X[cl['c']], X[cl['c'] + cl['cs']], Y[cl['r']], Y[cl['r'] + cl['rs']]
+        for y in (y0, y1):
+            for x in (x0, x1): cv[y][x] = '+'
+    for cl in cells:
+        x0, y0 = X[cl['c']], Y[cl['r']]
+        for k, line in enumerate(cl['lines']):
+            x = x0 + 2
+            for ch in line:
+                cv[y0 + 1 + k][x] = ch; x += 1
+                if unicodedata.east_asian_width(ch) in 'WF': cv[y0 + 1 + k][x] = ''; x += 1
+    return '\n'.join(''.join(row) for row in cv)
+
+
 def table(ctx, t):
-    if ctx.a.no_table_conversion:                      # 표를 변환하지 않고 칸 안의 글만 칸 순서대로 평문단으로 남긴다
+    if ctx.a.no_table_conversion or (ctx.in_fn and not all(c.find(p_('cellSpan')).get('colSpan') == '1' and c.find(p_('cellSpan')).get('rowSpan') == '1' for tr in t.findall(p_('tr')) for c in tr.findall(p_('tc')))):                      # 표를 변환하지 않고 칸 안의 글만 칸 순서대로 평문단으로 남긴다
         ctx.stats['tbl_text'] += 1
         texts = [x for tr in t.findall(p_('tr')) for c in tr.findall(p_('tc')) for x in cell_paras(ctx, c)]
         return '\n\n'.join(lsafe(x) for x in texts)
@@ -627,6 +699,12 @@ def table(ctx, t):
     simple = all(c.find(p_('cellSpan')).get('colSpan') == '1' and c.find(p_('cellSpan')).get('rowSpan') == '1' for r in rows for c in r)
     simple = simple and not any(True for _ in t.iter(p_('pic'))) and not any(x is not t for x in t.iter(p_('tbl')))
     ctext = lambda c: ' '.join(' '.join(cell_paras(ctx, c)).split()).replace('|', '\\|')
+    if not simple and rows and not any(True for _ in t.iter(p_('pic'))) and not any(x is not t for x in t.iter(p_('tbl'))) and not ctx.in_fn and ctx.a.grid_tables:
+        g = grid_table(ctx, t, rows)
+        if g:
+            ctx.stats['tbl_grid'] += 1
+            if is_long_table(ctx, t, len(rows)): g += '\n{env=long}'; ctx.stats['tbl_long'] += 1
+            return g
     if simple and rows:
         ctx.stats['tbl_ok'] += 1
         L = ['| ' + ' | '.join(ctext(c) for c in rows[0]) + ' |', '|' + '---|' * len(rows[0])]
@@ -768,12 +846,13 @@ def footnote_label(ctx, fn, prefix=''):
 
 def footnote_paras(ctx, fn, endnote=False):
     """각주 안 문단들 -> 글(수식 표지 포함) 목록. 그림·표 같은 블록은 그 자리에 문단으로 끼운다."""
-    prev = ctx.in_note
+    prev, prev_fn = ctx.in_note, ctx.in_fn
     if endnote: ctx.in_note = True                 # 미주 안의 작은 아이콘 그림은 건너뛴다
+    ctx.in_fn = True                               # 각주 안에는 grid 표를 둘 수 없다
     try:
         return _footnote_paras(ctx, fn)
     finally:
-        ctx.in_note = prev
+        ctx.in_note, ctx.in_fn = prev, prev_fn
 
 
 def _footnote_paras(ctx, fn):
@@ -1215,6 +1294,9 @@ def main():
     ap.add_argument('--endnotes', choices=['ref', 'collect', 'drop'], default='ref',
                     help='ref: 본문에 [^en1]{end}, 정의는 문단 뒤에 내고 front matter 에 \\endnote 설정을 넣는다 (ndhmd4tex) / '
                          'collect: 번호 붙인 미주를 문서 끝 별면에 모아 낸다 (본문에 표지 없음) / drop: 버린다')
+    ap.add_argument('--no-grid-tables', dest='grid_tables', action='store_false',
+                    help='병합 셀이 있는 표를 grid 표로 내지 않고 자리 표시로 둔다')
+    ap.add_argument('--grid-max-cols', type=int, default=12, help='grid 표로 내는 표의 열 수 상한 (기본 12, 넘으면 자리 표시)')
     ap.add_argument('--no-table-conversion', '--table-conversion-false', dest='no_table_conversion', action='store_true',
                     help='표를 변환하려 하지 않고 칸 안의 글만 칸 순서대로 평문단으로 남긴다')
     ap.add_argument('--notes-at-end', action='store_true',
