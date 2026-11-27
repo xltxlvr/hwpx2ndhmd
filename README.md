@@ -67,7 +67,7 @@ python hwpx2ndhmd.py --version
 \ifcsname yeonseubmunje\endcsname\else\newenvironment{yeonseubmunje}{}{}\fi % 연습문제
 ```
 
-`--env-in-preamble`을 주면 이 목록을 front matter 의 `preamble+:`에도 넣습니다. 중첩된 환경은 바깥·안쪽 모두 `:::`로 냅니다(`::::`는 쓰지 않음).
+`--env-in-preamble`을 주면 이 목록을 front matter 의 `preamble+:`에도 넣고, `--env-input`을 주면 목록 대신 `\input{출력파일.envs.tex}` 한 줄을 넣습니다(대응표 파일을 그대로 불러 쓰므로 환경 모양은 그 파일에서 고치면 됩니다). 중첩된 환경은 바깥·안쪽 모두 `:::`로 냅니다(`::::`는 쓰지 않음).
 
 ### 헤딩
 
@@ -202,6 +202,7 @@ python hwpx2ndhmd.py --version
 | `--env-names {romanize,keep}` | `romanize` | 환경 이름 만드는 방식 |
 | `--env-table FILE` | `출력.envs.tex` | 환경 대응표 파일 |
 | `--env-in-preamble` | | `\newenvironment` 목록을 front matter 에도 넣음 |
+| `--env-input` | | front matter 의 `preamble+:`에 `\input{출력파일.envs.tex}` 를 넣음 (경로는 출력 파일 기준) |
 | `--custompkg PKGS` | | `\usepackage{…}`를 더할 패키지(쉼표로 구분) |
 | `--no-preamble` | | 수식용 front matter 를 넣지 않음 |
 | `--display {auto,none}` | `auto` | 디스플레이 수식 추정 |

@@ -12,7 +12,7 @@ import xml.etree.ElementTree as ET
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import hwpeq
 
-__version__ = '0.0.23'
+__version__ = '0.0.24'
 
 PN = 'http://www.hancom.co.kr/hwpml/2011/paragraph'
 HN = 'http://www.hancom.co.kr/hwpml/2011/head'
@@ -1198,6 +1198,13 @@ def convert(path, a):
     if '\\includegraphics' in md and '\\usepackage{graphicx}' not in pre: pre.append('\\usepackage{graphicx}')
     if getattr(a, 'env_in_preamble', False) and ctx.envs:
         pre += [l for l in env_table_tex(ctx, a.input).splitlines() if l.startswith('\\ifcsname')]
+    if getattr(a, 'env_input', False) and ctx.envs:                  # 목록을 넣지 않고 \input 으로 불러온다
+        ep = getattr(a, 'env_table', None) or os.path.splitext(a.output or a.input)[0] + '.envs.tex'
+        base = os.path.dirname(os.path.abspath(a.output)) if a.output else os.path.dirname(os.path.abspath(a.input))
+        ref = os.path.relpath(os.path.abspath(ep), base).replace(os.sep, '/')
+        line = '\\input{%s}' % ref
+        if line not in pre: pre.append(line)
+        if not (a.output or getattr(a, 'env_table', None)): ctx.warn.append('--env-input: 출력 파일(-o)이나 --env-table 이 없어 %s 를 쓰지 않습니다' % ref)
     fm = ''
     mr = ''
     if getattr(ctx, 'used_endnote', False):       # [^enN]{end} 를 \endnote{…} 로 바꾸고 문서 끝에 미주를 모은다
@@ -1439,6 +1446,7 @@ def main():
                     help='수식이 있어도 front matter(preamble+: amsmath,amssymb)를 넣지 않는다')
     ap.add_argument('--env-table', metavar='FILE', help='스타일 이름 -> 환경 이름 대응표와 \\newenvironment 목록을 쓸 파일 (기본: 출력파일.envs.tex, 환경이 있을 때만)')
     ap.add_argument('--env-in-preamble', action='store_true', help='\\newenvironment 목록을 front matter 의 preamble+: 에도 넣는다')
+    ap.add_argument('--env-input', action='store_true', help='front matter 의 preamble+: 에 \\input{출력파일.envs.tex} 를 적는다 (목록을 본문 파일에 넣지 않고 대응표 파일을 불러옴)')
     ap.add_argument('--footnotes', choices=['ref', 'inline', 'drop'], default='ref',
                     help='ref: [^1] 과 [^1]: 정의 (문단 바로 뒤) / inline: ^[…] / drop: 버린다')
     ap.add_argument('--endnotes', choices=['ref', 'collect', 'drop'], default='ref',
