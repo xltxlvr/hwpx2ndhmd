@@ -3,7 +3,7 @@
 hwpx2ndhmd 0.0.10 (`hwpeq.py`)이 한컴 수식 편집기의 스크립트를 LaTeX로 바꾸는 방식을 정리한 표입니다.
 "변환 결과" 열은 손으로 쓴 것이 아니라 `gen/gen_mathsyntax.py`가 `hwpeq.py`를 실제로 돌려 만든 값입니다.
 
-명령 이름의 뼈대(그리스 문자·기호·연산자·화살표·괄호·함수 표)는 [rhwp](https://github.com/edwardkim/rhwp)(MIT License, Copyright (c) 2025-2026 Edward Kim)의 `symbols.rs`에서 가져왔고, 첨자 인자의 범위나 `over`의 결합 범위 같은 규칙도 rhwp의 파서를 따랐습니다. 한컴 수식 문법은 Unix `eqn`(troff 전처리기)의 계통이라고 합니다. `over`의 결합 범위나 `sup`·`over`의 우선순위처럼 애매한 규칙은 `eqn` 매뉴얼을 참고할 수 있습니다. 한컴 화면과 일대일로 비교해 본 것은 아니며, 사용자가 한글에서 직접 확인한 규칙에는 "한글에서 확인함"이라고 적었습니다.
+명령 이름의 뼈대(그리스 문자·기호·연산자·화살표·괄호·함수 표)는 [rhwp](https://github.com/edwardkim/rhwp)(MIT License, Copyright (c) 2025-2026 Edward Kim)의 `symbols.rs`에서 가져왔고, 첨자 인자의 범위나 `over`의 결합 범위 같은 규칙도 rhwp의 파서를 따랐습니다. 한컴 수식 문법은 Unix `eqn`(troff 전처리기)의 계통이라고 합니다(한글 개발자의 증언에 따름). `over`의 결합 범위나 `sup`·`over`의 우선순위처럼 애매한 규칙은 `eqn` 매뉴얼을 참고할 수 있습니다. 한컴 화면과 일대일로 비교해 본 것은 아니며, 사용자가 한글에서 직접 확인한 규칙에는 "한글에서 확인함"이라고 적었습니다.
 
 ## 목차
 
@@ -15,7 +15,7 @@ hwpx2ndhmd 0.0.10 (`hwpeq.py`)이 한컴 수식 편집기의 스크립트를 LaT
 
 - **중괄호 억제.** 필요한 곳에만 중괄호를 씁니다. 한 글자 첨자는 `x^2`, 두 글자 이상은 `x^{n+1}`처럼 쓰고, `{…}` 그룹은 첨자의 밑이 될 때만 괄호로 감쌉니다.
 - **첨자 인자.** `{…}`가 아니면 공백, 닫는 괄호(`)`·`]`·`}`), `RIGHT`, 반대쪽 첨자 앞까지 붙은 토큰 전부가 인자입니다. 그래서 `x^2+1`은 `x^{2+1}`, `sum_i=1^n`은 `\sum_{i=1}^n`이 됩니다. 한컴 화면에서 의도와 다르게 보이는 수식이었다면 변환 결과도 같게 나옵니다.
-- **OVER·ATOP.** 분자는 앞쪽의, 공백으로 끊기지 않은 한 덩어리이고 분모는 뒤쪽의 같은 덩어리입니다(`x+1 over 2`는 `(x+1)/2`, `x + 1 over 2`는 `x+1/2`). 덩어리 범위를 분명히 하려면 `{…}`로 묶으십시오.
+- **OVER·ATOP.** 분자는 앞쪽의, 공백으로 끊기지 않은 한 덩어리이고 분모는 뒤쪽의 같은 덩어리입니다(`x+1 over 2`는 `(x+1)/2`, `x + 1 over 2`는 `x+1/2`). `{…}`로 시작하면 그 묶음만이 인자입니다. 한글의 한계로, 공백 없이 붙은 덩어리가 10글자 이상이면 9글자 뒤에서 끊어 읽습니다. 분자는 10번째 글자부터만, 분모·`sqrt`·장식 명령(`bar`, `hat` 등)·`root … of`의 인자는 처음 9글자만 잡고 나머지는 밖에 남습니다(`f(x+h)-f(x) over h` → `f(x+h)-f(\frac{x)}{h}`). 글자 수만 세고 괄호·연산자와는 무관합니다. 긴 식은 `{…}`로 묶으십시오. 20글자 이상에서 9글자마다 끊는지는 확인하지 못했습니다. `root`에 붙지 못한 `of`는 그냥 변수가 됩니다(괄호를 낀 식은 `{…}`로 묶으십시오). `sqrt`, `root … of`와 장식 명령(`bar`, `hat`, `vec`, `underline` 등)의 인자도 같은 규칙입니다(`sqrt 2+3` → `\sqrt{2+3}`). 덩어리 범위를 분명히 하려면 `{…}`로 묶으십시오.
 - **글꼴 전환.** `rm`, `it`, `bold`는 중괄호로 끊기지 않는 전역 전환입니다.
 - **대소문자.** 그리스 문자와 화살표 이름은 대소문자를 구분합니다(`alpha`와 `Alpha`는 다름). 그 밖의 기호·연산자·함수는 대문자로 한 번 더 찾습니다(`times`와 `TIMES` 모두 가능).
 - **붙여 쓴 키워드.** `sinx`, `overa`, `leqb`처럼 붙은 이름은 알려진 키워드 단위로 나눕니다.
@@ -50,6 +50,15 @@ hwpx2ndhmd 0.0.10 (`hwpeq.py`)이 한컴 수식 편집기의 스크립트를 LaT
 | <code>x+1 over 2</code> | <code>\frac{x+1}{2}</code> | 붙여 쓴 `x+1`이 통째로 분자 (한글에서 확인함) |
 | <code>x + 1 over 2</code> | <code>x+\frac{1}{2}</code> | 띄어 쓰면 직전 원소(`1`)만 분자 (한글에서 확인함) |
 | <code>a+b over c+d</code> | <code>\frac{a+b}{c+d}</code> | 분모도 공백 전까지 붙은 것 모두 |
+| <code>(a+b) over c</code> | <code>\frac{(a+b)}{c}</code> | 9글자 이하면 괄호가 있어도 덩어리 전체 (한글에서 확인함) |
+| <code>f(a)-f(b) over f(c)</code> | <code>\frac{f(a)-f(b)}{f(c)}</code> | 9글자 (한글에서 확인함) |
+| <code>f(x+h)-f(x) over h</code> | <code>f(x+h)-f(\frac{x)}{h}</code> | 붙은 덩어리가 10글자 이상이면 9글자 뒤에서 끊어 읽어, 분자가 `x)`뿐이 되고 괄호가 어긋남 (한글에서 확인함) |
+| <code>{f(x+h)-f(x)} over h</code> | <code>\frac{f(x+h)-f(x)}{h}</code> | `{…}`로 묶으면 안전 |
+| <code>f(2x)-f(x) over h</code> | <code>f(2x)-f(x\frac{)}{h}</code> | 끊김은 글자 수만 보며 괄호와 무관 (한글에서 확인함) |
+| <code>abcdefghijkl over z</code> | <code>abcdefghi\frac{jkl}{z}</code> | 글자·숫자·연산자 구분 없이 9글자 (한글에서 확인함) |
+| <code>a+b+c+d+e+f+g over z</code> | <code>a+b+c+d+e\frac{+f+g}{z}</code> | (한글에서 확인함) |
+| <code>1234567890 over z</code> | <code>123456789\frac{0}{z}</code> | (한글에서 확인함) |
+| <code>1234567890123 over abcdefgbijklmnob</code> | <code>123456789\frac{0123}{abcdefgbi}jklmnob</code> | 분모도 9글자까지만 잡고 나머지는 분수 밖 (한글에서 확인함) |
 | <code>{x+1} over 2</code> | <code>\frac{x+1}{2}</code> |  |
 | <code>{1 over 2} over 3</code> | <code>\frac{\frac{1}{2}}{3}</code> |  |
 | <code>a atop b</code> | <code>{a\atop b}</code> | `atop`: 분수선 없는 위아래 쌓기 |
@@ -61,6 +70,11 @@ hwpx2ndhmd 0.0.10 (`hwpeq.py`)이 한컴 수식 편집기의 스크립트를 LaT
 | --- | --- | --- |
 | <code>sqrt x</code> | <code>\sqrt{x}</code> |  |
 | <code>sqrt {x+1}</code> | <code>\sqrt{x+1}</code> |  |
+| <code>sqrt 2+3+x^n+1</code> | <code>\sqrt{2+3+x^{n+1}}</code> | 붙여 쓴 덩어리 전체가 근호 안 (`over`와 같은 규칙) |
+| <code>sqrt 2+3 + x</code> | <code>\sqrt{2+3}+x</code> | 공백에서 끝남 |
+| <code>sqrt abcdefghijkl</code> | <code>\sqrt{abcdefghi}jkl</code> | `sqrt`도 9글자까지만 (한글에서 확인함) |
+| <code>root 1111111111 of 0</code> | <code>\sqrt{111111111}1of0</code> | 지수가 9글자를 넘으면 `of`가 붙지 못해 그냥 변수 `of`가 됨 (한글에서 확인함) |
+| <code>root 111111111 of 000000000000</code> | <code>\sqrt[111111111]{000000000}000</code> | `root … of`도 지수·근호 안 모두 9글자까지 (한글에서 확인함) |
 | <code>sqrt {3} of {x+1}</code> | <code>\sqrt[3]{x+1}</code> | n제곱근 (`{n} of {x}`) |
 | <code>root 3 of x</code> | <code>\sqrt[3]{x}</code> | n제곱근 (`root n of x`) |
 
@@ -72,6 +86,8 @@ hwpx2ndhmd 0.0.10 (`hwpeq.py`)이 한컴 수식 편집기의 스크립트를 LaT
 | <code>Gamma Delta Omega</code> | <code>\Gamma\Delta\Omega</code> |  |
 | <code>INF</code> | <code>\infty</code> | `inf`도 ∞ (함수 inf 가 아님) |
 | <code>{partial f} over {partial x}</code> | <code>\frac{\partial f}{\partial x}</code> | 편미분 (분자·분모를 `{…}`로 묶어야 함) |
+| <code>partial x+1</code> | <code>\partial x+1</code> | `partial`은 인자를 받지 않는 기호 (한글에서 확인함) |
+| <code>partial y+c over partial x</code> | <code>\partial\frac{y+c}{\partial}x</code> | 묶지 않으면 분자는 `y+c`, 분모는 `partial` 하나뿐 (한글에서 확인함) |
 | <code>nabla times F</code> | <code>\nabla\times F</code> |  |
 | <code>forall x in A</code> | <code>\forall x\in A</code> |  |
 | <code>exists y</code> | <code>\exists y</code> |  |
@@ -125,6 +141,9 @@ hwpx2ndhmd 0.0.10 (`hwpeq.py`)이 한컴 수식 편집기의 스크립트를 LaT
 | <code>hat x</code> | <code>\hat{x}</code> |  |
 | <code>vec v</code> | <code>\vec{v}</code> |  |
 | <code>bar x</code> | <code>\overline{x}</code> |  |
+| <code>bar x+y</code> | <code>\overline{x+y}</code> | 붙여 쓴 덩어리 전체에 줄 (한글에서 확인함) |
+| <code>bar x + y</code> | <code>\overline{x}+y</code> | 공백에서 끝남 (한글에서 확인함) |
+| <code>bar abcdefghijkl</code> | <code>\overline{abcdefghi}jkl</code> | `bar`도 9글자까지만 (한글에서 확인함) |
 | <code>tilde x</code> | <code>\tilde{x}</code> |  |
 | <code>dot x</code> | <code>\dot{x}</code> |  |
 | <code>ddot x</code> | <code>\ddot{x}</code> |  |

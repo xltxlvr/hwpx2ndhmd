@@ -5,7 +5,14 @@
 ## 0.0.21 (2026-11-28)
 
 **고침**
-- `over`(`atop`, `choose` 포함)의 분자·분모 범위: 공백으로 끊기지 않은 덩어리 전체. `x+1 over 2`는 `\frac{x+1}{2}`, `x + 1 over 2`는 `x+\frac{1}{2}`, `a+b over c+d`는 `\frac{a+b}{c+d}`. 전에는 `x+1 over 2`가 `x+\frac{1}{2}`로 나왔음. mathsyntax.md 갱신 (한글에서 직접 확인한 규칙은 "한글에서 확인함"으로 표시, 문법이 eqn 계통이라는 안내 추가)
+- `over`(`atop`, `choose` 포함)의 분자·분모 범위: 공백으로 끊기지 않은 덩어리 전체. `x+1 over 2`는 `\frac{x+1}{2}`, `x + 1 over 2`는 `x+\frac{1}{2}`, `a+b over c+d`는 `\frac{a+b}{c+d}`. `sqrt`·`root … of`·장식 명령(`bar`, `hat`, `vec`, `underline`…)의 인자도 같은 규칙 (`sqrt 2+3+x^n+1` → `\sqrt{2+3+x^{n+1}}`; 전에는 첫 원소만 근호 안). `{…}`로 시작하면 그 묶음만. 한글의 한계 재현: 공백 없이 붙은 덩어리가 10글자 이상이면 9글자 뒤에서 끊어 읽음 (분자는 10번째 글자부터, 분모·`sqrt`·장식 명령(`bar` 등)·`root … of`의 인자는 처음 9글자만, `root`에 붙지 못한 `of`는 변수 (`root 1111111111 of 0` → `\sqrt{111111111}1of0`); `f(x+h)-f(x) over h` → `f(x+h)-f(\frac{x)}{h}`, `abcdefghijkl over z` → `abcdefghi\frac{jkl}{z}`; 괄호·연산자와 무관, 한글에서 확인함). 분모 덩어리는 짝이 맞는 소괄호를 포함 (`f(a)-f(b) over f(c)`). # 변경 내역
+
+최신 버전이 위에 옵니다.
+
+## 0.0.21 (2026-11-28)
+
+**고침**
+- `over`(`atop`, `choose` 포함)의 분자·분모 범위: 공백으로 끊기지 않은 덩어리 전체. `x+1 over 2`는 `\frac{x+1}{2}`, `x + 1 over 2`는 `x+\frac{1}{2}`, `a+b over c+d`는 `\frac{a+b}{c+d}`. `sqrt`·`root … of`·장식 명령(`bar`, `hat`, `vec`, `underline`…)의 인자도 같은 규칙 (`sqrt 2+3+x^n+1` → `\sqrt{2+3+x^{n+1}}`; 전에는 첫 원소만 근호 안). `{…}`로 시작하면 그 묶음만. 한글의 버릇 재현: 분자 덩어리가 `-f(x)` 꼴(연산자 + 이름 + 괄호 묶음)로 끝나고 앞에 연산자가 든 괄호 묶음이 있으면 마지막 `(` 뒤만 분자 (추정 조건; `f(x+h)-f(x) over h` → `f(x+h)-f(\frac{x)}{h}`; `(a+b) over c`, `(a)(b) over c`, `a(x+h) over c`, `a(b(c)) over d`, `a-f(x) over h`, `f(x)-f(y) over z`는 전체). 전에는 `x+1 over 2`가 `x+\frac{1}{2}`로 나왔음. mathsyntax.md 갱신 (한글에서 직접 확인한 규칙은 "한글에서 확인함"으로 표시, 문법이 eqn 계통이라는 안내 추가)
 
 ## 0.0.20 (2026-11-27)
 

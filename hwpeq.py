@@ -73,8 +73,54 @@ def text_escape(v):
 
 
 class Toks(list):
-    """토큰 목록. .sp = 앞에 공백이 있었던 토큰의 위치 (첨자 인자의 범위를 정할 때 쓴다)"""
-    sp = None
+    """토큰 목록. .sp = 앞에 공백이 있었던 토큰의 위치 (첨자 인자의 범위를 정할 때 쓴다)
+    .pos = 토큰마다 원문 글자 위치, .brk = 공백 없는 덩어리가 9글자씩 끊기는 곳의 토큰 위치 (OVER 의 분자 범위)"""
+    sp = None; cur = 0
+
+    def append(self, x):
+        list.append(self, x)
+        if not hasattr(self, 'pos'): self.pos = []
+        self.pos.append(self.cur)
+
+
+CHUNK = 9        # 한글은 공백 없이 붙은 덩어리가 9글자를 넘으면 9글자 뒤에서 끊어 읽는다 (한글에서 확인함; OVER 의 분자)
+
+
+def mark_chunks(toks):
+    """공백 없는 덩어리를 9글자씩 끊는 위치를 .brk(토큰 위치 집합)에 모은다.
+    끊김이 숫자·영문자 토큰 한가운데면 그 토큰을 둘로 쪼갠다(.sp 도 새 위치로 옮긴다)."""
+    pos = getattr(toks, 'pos', [])
+    if len(pos) != len(toks):
+        toks.brk = set(); return toks
+    # 덩어리(공백으로 끊긴 구간)의 시작 글자 위치
+    run0 = []; cur = pos[0] if pos else 0
+    for t in range(len(toks)):
+        if t in toks.sp: cur = pos[t]
+        run0.append(cur)
+    new, npos, remap = [], [], {}
+    for t, (k, v) in enumerate(toks):
+        remap[t] = len(new)
+        off = pos[t] - run0[t]
+        if k in ('num', 'id') and off // CHUNK != (off + len(v) - 1) // CHUNK:
+            while v:
+                take = CHUNK - (off % CHUNK)
+                new.append((k, v[:take])); npos.append(run0[t] + off)
+                v = v[take:]; off += take
+        else:
+            new.append((k, v)); npos.append(pos[t])
+    sp = {remap[t] for t in toks.sp if t in remap}
+    new_run0 = []; cur = npos[0] if npos else 0
+    for t in range(len(new)):
+        if t in sp: cur = npos[t]
+        new_run0.append(cur)
+    brk = set()
+    for t in range(1, len(new)):
+        if t in sp: continue
+        if (npos[t] - new_run0[t]) // CHUNK > (npos[t - 1] - new_run0[t - 1]) // CHUNK and new_run0[t] == new_run0[t - 1]: brk.add(t)
+    toks[:] = []
+    for x in new: list.append(toks, x)
+    toks.pos = npos; toks.sp = sp; toks.brk = brk
+    return toks
 
 
 def tokenize(src):
@@ -83,7 +129,7 @@ def tokenize(src):
     toks.sp = set(); mark = None
     while i < n:
         if mark is not None and len(toks) > mark: toks.sp.add(mark); mark = None
-        c = src[i]
+        c = src[i]; toks.cur = i
         if c.isspace():
             if mark is None: mark = len(toks)
             i += 1; continue
@@ -100,8 +146,9 @@ def tokenize(src):
         if c.isdigit():
             m = re.match(r'\d+(\.\d+)?', src[i:]); toks.append(('num', m.group())); i += m.end(); continue
         if c.isascii() and c.isalpha():
-            w = re.match(r'[A-Za-z]+', src[i:]).group(); i += len(w)
+            w = re.match(r'[A-Za-z]+', src[i:]).group(); i += len(w); wend = i
             while w:
+                toks.cur = wend - len(w)
                 if is_keyword(w):
                     toks.append(('cmd', w)); break
                 lw = w.lower(); done = False
@@ -126,7 +173,7 @@ def tokenize(src):
         if j == i: j = i + 1
         toks.append(('na', src[i:j])); i = j
     if mark is not None and len(toks) > mark: toks.sp.add(mark)
-    return toks
+    return mark_chunks(toks)
 
 
 class G(str):
@@ -135,7 +182,7 @@ class G(str):
 
 class P:
     def __init__(s, toks):
-        s.t = toks; s.i = 0; s.font = 'it'; s.sp = getattr(toks, 'sp', None) or set()
+        s.t = toks; s.i = 0; s.font = 'it'; s.sp = getattr(toks, 'sp', None) or set(); s.brk = getattr(toks, 'brk', None) or set()
 
     def peek(s):
         return s.t[s.i] if s.i < len(s.t) else (None, None)
@@ -156,6 +203,21 @@ class P:
     def element(s):
         """OVER 의 분모, 장식·SQRT 의 인자처럼 '다음 한 요소'."""
         return s.script(s.atom())
+
+    def run(s, chunk=False):
+        """공백으로 끊기지 않은 한 덩어리 (OVER 의 분모, SQRT·장식의 인자).  {…} 로 시작하면 그 묶음만.  덩어리 안의 소괄호는 짝이 맞으면 포함."""
+        braced = s.peek() == ('ch', '{')
+        parts = [s.element()]; depth = 1 if parts[0] == '(' else 0
+        while not braced:
+            k2, v2 = s.peek()
+            if k2 is None or s.i in s.sp: break
+            if chunk and s.i in s.brk: break                   # 9글자 끊김 (OVER 의 분모)
+            if (k2, v2) == ('ch', ')') and depth > 0: depth -= 1; parts.append(s.element()); continue
+            if (k2, v2) in (('ch', '}'), ('ch', ']'), ('ch', ')'), ('ch', '`'), ('ch', '~'), ('ch', '&'), ('ch', '#')): break
+            if k2 == 'cmd' and v2.upper() in ('RIGHT', 'OVER', 'ATOP', 'CHOOSE', 'OF'): break
+            if (k2, v2) == ('ch', '('): depth += 1
+            parts.append(s.element())
+        return ''.join(str(x) for x in parts)
 
     def arg(s):
         a = s.atom()
@@ -226,7 +288,8 @@ class P:
         up = v.upper(); lo = v.lower()
         if lo in FONTS and v in (lo, up, v):
             s.font = FONTS[lo]; return ''           # 전역 전환 (rhwp: 중괄호로 끊기지 않음)
-        if up in ('OVER', 'ATOP', 'CHOOSE', 'OF'): return ''
+        if up in ('OVER', 'ATOP', 'CHOOSE'): return ''
+        if up == 'OF': return s.wrap_font('of')              # root 에 붙지 못한 of 는 그냥 변수 (한글에서 확인함)
         if up in ('SQRT', 'ROOT'): return s.sqrt()
         if up in ('LEFT', 'RIGHT'):
             d = s.delim()
@@ -247,7 +310,7 @@ class P:
             return '\\begin{%s}%s\\end{%s}' % (env, body, env)
         if lo == 'inf': return r'\infty '
         if lo in DECO:
-            return DECO[lo] + '{' + str(s.element()).strip() + '}'
+            return DECO[lo] + '{' + s.run(chunk=True).strip() + '}'
         if v == 'lim' or v == 'Lim' or up == 'LIM': return r'\lim '
         if v in T['FUNCTIONS'] or lo in T['FUNCTIONS']:
             f = v if v in T['FUNCTIONS'] else lo
@@ -272,7 +335,7 @@ class P:
                 s.i += 1                                            # OF
         if idx is None and s.i + 1 < len(s.t) and s.t[s.i + 1][0] == 'cmd' and s.t[s.i + 1][1].upper() == 'OF':
             idx = str(s.atom()).strip(); s.i += 1                  # ROOT n OF x (단일 원자 지수)
-        body = str(s.atom()).strip()
+        body = s.run(chunk=True).strip()
         return (r'\sqrt[' + idx + ']{' + body + '}') if idx is not None else r'\sqrt{' + body + '}'
 
     def match(s, i):
@@ -356,18 +419,11 @@ class P:
                 s.i += 1
                 # 분자 = 앞쪽의, 공백으로 끊기지 않은 한 덩어리 (x+1 over 2 -> (x+1)/2,  x + 1 over 2 -> x + 1/2)
                 j = len(out) - 1
-                while j > 0 and out.starts[j] not in s.sp: j -= 1
+                while j > 0 and out.starts[j] not in s.sp and out.starts[j] not in s.brk: j -= 1     # 공백 또는 9글자 끊김에서 끝
                 j = max(j, 0)
                 num = ''.join(str(x) for x in out[j:]); start0 = out.starts[j] if out else s.i
                 del out[j:]; del out.starts[j:]
-                parts = [s.element()]                          # 분모도 공백 전까지 붙은 것 모두
-                while True:
-                    k2, v2 = s.peek()
-                    if k2 is None or s.i in s.sp: break
-                    if (k2, v2) in (('ch', '}'), ('ch', ']'), ('ch', ')'), ('ch', '`'), ('ch', '~'), ('ch', '&'), ('ch', '#')): break
-                    if k2 == 'cmd' and v2.upper() in ('RIGHT', 'OVER', 'ATOP', 'CHOOSE', 'OF'): break
-                    parts.append(s.element())
-                den = ''.join(str(x) for x in parts)
+                den = s.run(chunk=True)                        # 분모도 공백 전까지 붙은 것, 단 9글자까지
                 num, den = num.strip(), den.strip()
                 cur[0] = start0
                 if v.upper() == 'OVER': out.append(r'\frac{' + num + '}{' + den + '}')
