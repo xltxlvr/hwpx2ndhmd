@@ -7,12 +7,12 @@
  - 글상자·표 셀 글 등 인용 형태로 남기는 것은 :::{quote} 로 낸다 (문단이 여럿이면 :::{quotation})
 수식은 hwpeq.py (rhwp 규칙 기반) 가 LaTeX 로 바꾼다.
 """
-import sys, os, re, io, json, zipfile, argparse, collections, posixpath, math, unicodedata
+import sys, os, re, io, json, zipfile, argparse, collections, posixpath, math, unicodedata, shlex
 import xml.etree.ElementTree as ET
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import hwpeq
 
-__version__ = '0.0.15'
+__version__ = '0.0.21'
 
 PN = 'http://www.hancom.co.kr/hwpml/2011/paragraph'
 HN = 'http://www.hancom.co.kr/hwpml/2011/head'
@@ -108,6 +108,7 @@ class Ctx:
         self.display_list = []
         self.tops = []; self.top_index = {}; self.image_sizes = []; self.textwidth = 51026; self.body_h = 0; self.body_font = 0; self.used_wavedash = False
         self.headings = []        # 보고용
+        self.tdoc = None; self.targs = None; self.warn_once = set()                # hwpx2tblr (--table tblr / auto 의 마지막 수단)
         self.endnotes = []; self._note_ids = set()      # 본문에서 만난 미주 (마지막에 모아 낸다)
         self.numdefs = {}                               # numbering id -> {수준(1~): (모양 글, 형식, 시작값)}
         for nm in hd.iter(h_('numbering')):
@@ -527,7 +528,7 @@ def para_parts(ctx, p):
                             t('[^%s]' % label)
                             ctx.pending_notes.append((label, footnote_paras(ctx, c)))
             elif tag == 'equation':
-                t('\x01' + hwpeq.convert(ch.find(p_('script')).text or '') + '\x02'); ctx.stats['eq'] += 1
+                t('\x01' + eq_latex(ch.find(p_('script')).text or '') + '\x02'); ctx.stats['eq'] += 1
             elif tag == 'pic':
                 o = ch.find(p_('orgSz'))
                 if ctx.in_note and o is not None and int(o.get('width') or 0) <= 2400 and int(o.get('height') or 0) <= 1500:
@@ -610,6 +611,7 @@ def is_long_table(ctx, t, nrows):
     """표가 길다고 볼 조건: 내용으로 조판한 추정 높이가 본문 높이의 --long-table 배 이상이거나, 행이 --long-table-rows 개 이상.
     높이를 추정하지 못하면(칸 너비 없음, 본문 높이를 모름) 행 수만 본다."""
     a = ctx.a
+    if nrows < 2: return False                  # 한 행은 쪽을 나눌 수 없고, ndhmd4tex 의 longtblr 머리글 행(rowhead=1)이 행 수를 넘어 컴파일이 깨진다
     if a.long_table_rows and nrows >= a.long_table_rows: return True
     if a.long_table and ctx.body_h > 0:
         h = est_table_height(ctx, t)
@@ -632,6 +634,18 @@ def _wrap(text, width):
     return lines + [cur] if cur else lines
 
 
+MATH_MARK = re.compile('\x01([^\x02]*)\x02')
+
+
+def cell_math(p, protect_space=False):
+    """칸 글 속의 수식 표지를 $…$ 로 바꾼다. 수식 안의 | 는 \\vert 로 (칸 가름으로 읽히지 않게),
+    protect_space 면 수식 안의 공백을 \x00 으로 (줄바꿈이 수식을 가르지 않게)"""
+    def f(m):
+        b = re.sub(r'(?<!\\)\|', r'\\vert ', m.group(1))
+        return '$' + (b.replace(' ', '\x00') if protect_space else b) + '$'
+    return MATH_MARK.sub(f, p.replace('\x02\x01', ''))
+
+
 def grid_table(ctx, t, rows):
     """병합 셀이 있는 표 -> pandoc grid 표 문자열 (ndhmd4tex 가 \\SetCell[r=,c=] 로 바꾼다). 못 만들면 None."""
     nr, nc = int(t.get('rowCnt') or 0), int(t.get('colCnt') or 0)
@@ -645,7 +659,7 @@ def grid_table(ctx, t, rows):
             if r0 + rs > nr or c0 + cs > nc: return None
             for y in range(r0, r0 + rs):
                 for x in range(c0, c0 + cs): cover[y][x] += 1
-            paras = [p.replace('\x02\x01', '') for p in cell_paras(ctx, c)]
+            paras = [cell_math(p, True) for p in cell_paras(ctx, c)]
             cells.append(dict(r=r0, c=c0, rs=rs, cs=cs, paras=paras))
     if any(v != 1 for row in cover for v in row): return None      # 칸이 빠지거나 겹치면 포기
     B = max(14, 96 // nc)                                              # 한 칸의 목표 너비(화면 칸)
@@ -654,7 +668,7 @@ def grid_table(ctx, t, rows):
         cl['lines'] = []
         for k, p in enumerate(cl['paras']):
             if k: cl['lines'].append('')
-            cl['lines'] += _wrap(p, w - 2) or ['']
+            cl['lines'] += [l.replace('\x00', ' ') for l in _wrap(p, w - 2)] or ['']
     W = [3] * nc                                                       # 칸 안쪽 너비
     for cl in sorted(cells, key=lambda x: x['cs']):
         need = max([_dw(l) for l in cl['lines']] + [1]) + 2
@@ -690,30 +704,105 @@ def grid_table(ctx, t, rows):
     return '\n'.join(''.join(row) for row in cv)
 
 
+def eq_latex(script):
+    """hwpeq 변환. 환경(cases·matrix 등) 밖에 남은 줄바꿈(#)은 글 속 수식과 디스플레이 수식에서 컴파일을 깨므로 공백으로 바꾼다"""
+    m = hwpeq.convert(script or '')
+    if '\\\\' in m and '\\begin' not in m and not re.search(r'\\(?:substack|shortstack|genfrac)', m):
+        m = re.sub(r'\s+', ' ', re.sub(r'(?:\\\\)+', ' ', m)).strip()
+    return m
+
+
+def tblr_pic(ctx, pic):
+    """tblr 칸 안의 그림 -> \\includegraphics (파일은 본문 그림과 같은 방법으로 저장, 크기는 hwpx2tblr.pic_latex). 못 하면 None"""
+    import hwpx2tblr
+    r = pic.find('.//*[@binaryItemIDRef]')
+    ref = r.get('binaryItemIDRef') if r is not None else None
+    path = save_image(ctx, pic, ref) if ref else None
+    if not path: return None
+    ctx.stats['pic'] += 1
+    return hwpx2tblr.pic_latex(ctx.tdoc, pic, path)
+
+
+def tblr_table(ctx, t):
+    """표 -> tabularray 원문(hwpx2tblr). 바로 \\begin{tblr}…\\end{tblr} 로 낸다 (ndhmd4tex 는 이 구간을 건드리지 않는다). 못 만들면 None"""
+    try:
+        import hwpx2tblr
+    except ImportError:
+        if 'hwpx2tblr' not in ctx.warn_once: ctx.warn.append('hwpx2tblr.py 를 찾지 못해 tblr 표를 만들 수 없습니다'); ctx.warn_once.add('hwpx2tblr')
+        return None
+    try:
+        if ctx.tdoc is None:
+            d = hwpx2tblr.Doc(ctx.zip, roots=ctx.roots)
+            d.sub_env = True                                    # 안쪽 표는 subtblr: ndhmd4tex 가 \begin{tblr}…\end{tblr} 를 첫 \end{tblr} 에서 끊기 때문
+            d.pic_hook = lambda pic: tblr_pic(ctx, pic)
+            ap = hwpx2tblr.build_parser()
+            ap.set_defaults(long_table=ctx.a.long_table, long_table_rows=ctx.a.long_table_rows)
+            ctx.targs = ap.parse_args(['x.hwpx'] + shlex.split(ctx.a.tblr_args or ''))
+            hwpx2tblr.WAVE['on'] = ctx.targs.wavedash
+            ctx.tdoc = d
+        tex = hwpx2tblr.table_tex(ctx.tdoc, t, ctx.targs)
+    except SystemExit:
+        raise
+    except Exception as e:
+        ctx.warn.append('tblr 표를 만들지 못했습니다(%s: %s)' % (type(e).__name__, e)); return None
+    ctx.stats['tbl_tblr'] += 1
+    return tex
+
+
+def tblr_preamble(ctx, a):
+    """tblr 표가 하나라도 있으면 front matter 에 넣을 줄들"""
+    d = ctx.tdoc
+    if d is None or not ctx.stats['tbl_tblr']: return []
+    pre = ['\\usepackage{tabularray}', '\\usepackage{xcolor}']
+    need = set(d.need)
+    if 'graphicx' in need: pre.append('\\usepackage{graphicx}')
+    if need & {'amsmath', 'amssymb'} and a.preamble: pre.append('\\usepackage{amsmath,amssymb}')
+    if 'ulem' in need: pre.append('\\IfPackageLoadedTF{luatexko}{}{\\usepackage[normalem]{ulem}}')
+    pre += ['\\providecolor{hwp%s}{HTML}{%s}' % (c, c) for c in sorted(d.colors)]
+    pre += ['\\NewTblrEnviron{%s}' % n for n in sorted(d.sub_names)]
+    return pre
+
+
+def pipe_cell(ctx, c):
+    """파이프 표 칸 한 개의 글: 줄은 공백으로 잇고, 글 속 | 는 \\| 로, 수식 속 | 는 \\vert 로"""
+    s = ' '.join(' '.join(cell_paras(ctx, c)).split())
+    return ''.join(re.sub(r'(?<!\\)\|', r'\\vert ', x) if k % 2 else x.replace('|', '\\|') for k, x in enumerate(re.split('(\x01[^\x02]*\x02)', s)))
+
+
 def table(ctx, t):
-    if ctx.a.no_table_conversion or (ctx.in_fn and not all(c.find(p_('cellSpan')).get('colSpan') == '1' and c.find(p_('cellSpan')).get('rowSpan') == '1' for tr in t.findall(p_('tr')) for c in tr.findall(p_('tc')))):                      # 표를 변환하지 않고 칸 안의 글만 칸 순서대로 평문단으로 남긴다
+    a = ctx.a
+    allsimple = all(c.find(p_('cellSpan')).get('colSpan') == '1' and c.find(p_('cellSpan')).get('rowSpan') == '1' for tr in t.findall(p_('tr')) for c in tr.findall(p_('tc')))
+    if a.no_table_conversion or (ctx.in_fn and not allsimple):             # 표를 변환하지 않고 칸 안의 글만 칸 순서대로 평문단으로 남긴다
         ctx.stats['tbl_text'] += 1
         texts = [x for tr in t.findall(p_('tr')) for c in tr.findall(p_('tc')) for x in cell_paras(ctx, c)]
         return '\n\n'.join(lsafe(x) for x in texts)
     rows = [tr.findall(p_('tc')) for tr in t.findall(p_('tr'))]
-    simple = all(c.find(p_('cellSpan')).get('colSpan') == '1' and c.find(p_('cellSpan')).get('rowSpan') == '1' for r in rows for c in r)
-    simple = simple and not any(True for _ in t.iter(p_('pic'))) and not any(x is not t for x in t.iter(p_('tbl')))
-    ctext = lambda c: ' '.join(' '.join(cell_paras(ctx, c)).split()).replace('|', '\\|')
-    if not simple and rows and not any(True for _ in t.iter(p_('pic'))) and not any(x is not t for x in t.iter(p_('tbl'))) and not ctx.in_fn and ctx.a.grid_tables:
-        g = grid_table(ctx, t, rows)
-        if g:
-            ctx.stats['tbl_grid'] += 1
-            if is_long_table(ctx, t, len(rows)): g += '\n{env=long}'; ctx.stats['tbl_long'] += 1
-            return g
-    if simple and rows:
+    plain = not any(True for _ in t.iter(p_('pic'))) and not any(x is not t for x in t.iter(p_('tbl')))     # 그림·안쪽 표가 없다
+    simple = allsimple and plain
+    ctext = lambda c: pipe_cell(ctx, c)
+    mode = a.table
+    if mode == 'tblr' and rows and not ctx.in_fn:
+        tex = tblr_table(ctx, t)
+        if tex: return tex
+    if mode in ('auto', 'grid') and not simple or mode == 'grid':
+        if rows and plain and not ctx.in_fn and (a.grid_tables or mode == 'grid'):
+            g = grid_table(ctx, t, rows)
+            if g:
+                ctx.stats['tbl_grid'] += 1
+                if is_long_table(ctx, t, len(rows)): g += '\n{env=long}'; ctx.stats['tbl_long'] += 1
+                return g
+    if simple and rows and mode != 'tblr':
         ctx.stats['tbl_ok'] += 1
         L = ['| ' + ' | '.join(ctext(c) for c in rows[0]) + ' |', '|' + '---|' * len(rows[0])]
         L += ['| ' + ' | '.join(ctext(c) for c in r) + ' |' for r in rows[1:]]
         if is_long_table(ctx, t, len(rows)): L.append('{env=long}'); ctx.stats['tbl_long'] += 1       # ndhmd4tex: 쪽을 넘는 표(longtable)
         return '\n'.join(L)
+    if mode == 'auto' and rows and not ctx.in_fn:                           # 파이프·grid 로 못 내는 표(그림·안쪽 표·열이 많음·칸이 어긋남)는 tabularray 로
+        tex = tblr_table(ctx, t)
+        if tex: return tex
     ctx.stats['tbl_ph'] += 1
     head = '<!-- TABLE %sx%s: 변환 불가(병합/그림 포함) -->' % (t.get('rowCnt'), t.get('colCnt'))
-    if not ctx.a.keep_cell_text: return head
+    if not a.keep_cell_text: return head
     texts = [x for c in (c for r in rows for c in r) for x in cell_paras(ctx, c)]
     return head + '\n' + quote_block(texts)
 
@@ -823,14 +912,15 @@ _MATH_SPLIT = re.compile(r'(\$\$.*?\$\$|\x01[^\x02]*\x02)', re.S)
 
 def split_links(md):
     """본문 글에서 ] 바로 뒤에 [ 나 ( 가 오면 마크다운이 참조 링크 [글][이름] / 링크 [글](주소) 로 읽는다
-    (각주 앵커 [^3][눈썹…] 도 마찬가지). 그 사이에 빈 TeX 묶음 {} 을 끼워 떼어 놓는다.
+    (각주 앵커 [^3][눈썹…] 도 마찬가지). 그 사이에 빈 TeX 묶음 {} 을 끼워 떼어 놓는다 (ndhmd4tex 에서 글자 그대로 {} 로 나오니 검색해서 손볼 수 있다).
+    줄바꿈 \\\\ 바로 뒤의 [ 는 LaTeX 가 선택 인자로 읽어 컴파일이 깨지므로 같은 방식으로 \\\\ {}[ 로 만든다.
     수식($…$, $$…$$)과 그림(![…](…))·주석(<!--)·정의 머리([^3]:) 는 건드리지 않는다."""
     out = []; disp = False
     for line in md.split('\n'):
         if line.strip() in ('$$', '\\[', '\\]'): disp = line.strip() != '\\]' and not (line.strip() == '$$' and disp); out.append(line); continue
-        if disp or line.startswith(('![', '<!--', '|')) or ']' not in line:     # $$ 블록 안은 수식
+        if disp or line.lstrip().startswith(('![', '<!--', '|')) or ']' not in line:     # $$ 블록 안은 수식
             out.append(line); continue
-        out.append(''.join(p if i % 2 else re.sub(r'\](?=[\[(])', ']{}', p) for i, p in enumerate(_MATH_SPLIT.split(line))))
+        out.append(''.join(p if i % 2 else re.sub(r'(\\\\)\s*(?=\[)', r'\1 {}', re.sub(r'\](?=[\[(])', ']{}', p)) for i, p in enumerate(_MATH_SPLIT.split(line))))
     return '\n'.join(out)
 
 
@@ -891,7 +981,11 @@ def footnote_def(label, paras):
         if not r.strip(): continue
         if r.startswith('|'): items += _table_as_text(r)
         else: items.append(re.sub(r'^:::\{quotation\}', ':::{quote}', r))
-    BLK = (':::', '![', '<!--', '\\[', '$$')
+    def _pic(m):                                              # 각주 안의 그림은 떠다니는 figure 가 될 수 없다 -> 별행 한 줄의 \includegraphics (graphicx 만 있으면 됨)
+        w = re.search(r'width=([^,}]+)', m.group(2) or '')
+        return '\\includegraphics%s{%s}' % ('[width=%s]' % w.group(1) if w else '', m.group(1))
+    items = [re.sub(r'(?m)^!\[[^\]]*\]\(([^)]*)\)(\{[^}]*\})?[ \t]*$', _pic, r) for r in items]
+    BLK = (':::', '![', '<!--', '\\[', '$$', '\\includegraphics')
     lines = []
     for k, r in enumerate(items):
         ls = [l for l in r.split('\n') if l.strip()]               # 문단 안의 빈 줄은 없앤다 (인용·수식 블록 포함)
@@ -900,6 +994,8 @@ def footnote_def(label, paras):
         nxt = items[k + 1] if k + 1 < len(items) else None
         if nxt is not None and not r.startswith(BLK) and not nxt.startswith(BLK): ls[-1] += ' \\\\'   # 글과 글 사이만 \\
         lines += ls
+    for i in range(1, len(lines)):                               # \\ 바로 뒤의 [ 는 LaTeX 가 선택 인자(\\[길이])로 읽는다 -> {} 로 떼어 둔다
+        if lines[i - 1].endswith(' \\\\') and lines[i].lstrip().startswith('[') and not lines[i].lstrip().startswith('[^'): lines[i] = '{}' + lines[i]
     if not lines: return '[^%s]:' % label
     return '[^%s]: %s' % (label, lines[0]) + ''.join('\n    ' + l for l in lines[1:])
 
@@ -1097,6 +1193,9 @@ def convert(path, a):
         if not re.fullmatch(r'[A-Za-z0-9_.\-]+', pk): ctx.warn.append('--custompkg: 패키지 이름이 이상합니다: %r (그대로 넣음)' % pk)
         line = '\\usepackage{%s}' % pk
         if line not in pre: pre.append(line)
+    for l in tblr_preamble(ctx, a):
+        if l not in pre: pre.append(l)
+    if '\\includegraphics' in md and '\\usepackage{graphicx}' not in pre: pre.append('\\usepackage{graphicx}')
     if getattr(a, 'env_in_preamble', False) and ctx.envs:
         pre += [l for l in env_table_tex(ctx, a.input).splitlines() if l.startswith('\\ifcsname')]
     fm = ''
@@ -1258,6 +1357,57 @@ def env_name(name):
     return ''.join(out) or 'style'
 
 
+def layout_info(ctx, src):
+    """쪽 설정 정보(재현하지 않고 기록만). 구역(secPr)·단(colPr)·머리말/꼬리말·쪽 번호·쪽 나눔을 모은다.
+    위치는 '최상위 문단 번호'(모든 구역을 이어서 1부터)로 적는다."""
+    mm = lambda v: round(int(v) * 25.4 / 7200, 2) if v not in (None, '') and int(v) < 2 ** 31 else None
+    papers = {'A3': (297, 420), 'A4': (210, 297), 'A5': (148, 210), 'B4(JIS)': (257, 364), 'B5(JIS)': (182, 257), 'B5(ISO)': (176, 250),
+              'Letter': (215.9, 279.4), 'Legal': (215.9, 355.6), '신국판': (152, 225), '4x6배판': (188, 257), '국판': (148, 210)}
+    def attrs(e): return {k: v for k, v in e.attrib.items()}
+    def sub(e): return [dict(tag=c.tag.split('}')[-1], **attrs(c)) for c in e]
+    def text_of(e): return ' / '.join(t for t in (''.join(pp.itertext()).strip() for pp in e.iter(p_('p'))) if t)
+    out = dict(source=os.path.basename(src), note='참고용 기록입니다. 길이는 mm(원래 값은 *_hu, 1/7200 인치), 위치는 최상위 문단 번호(1부터)입니다.',
+               sections=[], columns=[], headers_footers=[], page_numbers=[], page_hiding=[], page_breaks=[])
+    n = 0
+    for si, root in enumerate(ctx.roots, 1):
+        for pp in root.findall(p_('p')):
+            n += 1
+            for sp in pp.iter(p_('secPr')):
+                pg = sp.find(p_('pagePr')); mg = pg.find(p_('margin')) if pg is not None else None
+                d = dict(file_index=si, paragraph=n)
+                if pg is not None:
+                    w, h = int(pg.get('width') or 0), int(pg.get('height') or 0)
+                    d.update(paper_width_mm=mm(w), paper_height_mm=mm(h), paper_width_hu=w, paper_height_hu=h,
+                             landscape_attr=pg.get('landscape'), orientation='landscape' if w > h else 'portrait', gutter_type=pg.get('gutterType'))
+                    pw, ph = sorted((mm(w), mm(h)))
+                    d['paper_name'] = next((k for k, (a0, b0) in papers.items() if abs(pw - a0) < 1.2 and abs(ph - b0) < 1.2), None)
+                if mg is not None:
+                    d['margins_mm'] = {k: mm(mg.get(k)) for k in ('left', 'right', 'top', 'bottom', 'header', 'footer', 'gutter')}
+                    d['margins_hu'] = {k: int(mg.get(k) or 0) for k in ('left', 'right', 'top', 'bottom', 'header', 'footer', 'gutter')}
+                    if pg is not None:
+                        m = d['margins_mm']; lscape = d['orientation'] == 'landscape'
+                        d['geometry_hint'] = '\\geometry{paperwidth=%gmm,paperheight=%gmm,left=%gmm,right=%gmm,top=%gmm,bottom=%gmm}' % (
+                            round(d['paper_width_mm'], 1), round(d['paper_height_mm'], 1), round(m['left'] + m['gutter'], 1), m['right'], m['top'], m['bottom'])
+                st = sp.find(p_('startNum')); vi = sp.find(p_('visibility')); bf = sp.findall(p_('pageBorderFill'))
+                if st is not None: d['start_num'] = attrs(st)
+                if vi is not None: d['visibility'] = attrs(vi)
+                for key, tag in (('footnote', 'footNotePr'), ('endnote', 'endNotePr')):
+                    e = sp.find(p_(tag))
+                    if e is not None: d[key] = {c.tag.split('}')[-1]: attrs(c) for c in e}
+                if bf: d['page_border_fill'] = [dict(attrs(b), offset=sub(b)) for b in bf]
+                d['text_direction'] = sp.get('textDirection'); d['master_pages'] = sp.get('masterPageCnt')
+                out['sections'].append(d)
+            if pp.get('pageBreak') == '1' or pp.get('columnBreak') == '1':
+                out['page_breaks'].append(dict(paragraph=n, page_break=pp.get('pageBreak') == '1', column_break=pp.get('columnBreak') == '1'))
+            for e in pp.iter():
+                tg = e.tag.split('}')[-1]
+                if tg == 'colPr': out['columns'].append(dict(paragraph=n, **attrs(e), parts=sub(e)))
+                elif tg in ('header', 'footer'): out['headers_footers'].append(dict(paragraph=n, kind=tg, apply=e.get('applyPageType'), text=text_of(e)))
+                elif tg in ('pageNum', 'newNum'): out['page_numbers'].append(dict(paragraph=n, kind=tg, **attrs(e)))
+                elif tg == 'pageHiding': out['page_hiding'].append(dict(paragraph=n, **attrs(e)))
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser(description='hwpx -> (ndh)md  (version %s)' % __version__)
     ap.add_argument('-V', '--version', action='version', version='hwpx2ndhmd %s' % __version__)
@@ -1294,8 +1444,14 @@ def main():
     ap.add_argument('--endnotes', choices=['ref', 'collect', 'drop'], default='ref',
                     help='ref: 본문에 [^en1]{end}, 정의는 문단 뒤에 내고 front matter 에 \\endnote 설정을 넣는다 (ndhmd4tex) / '
                          'collect: 번호 붙인 미주를 문서 끝 별면에 모아 낸다 (본문에 표지 없음) / drop: 버린다')
+    ap.add_argument('--table', choices=['auto', 'pipe', 'grid', 'tblr'], default='auto',
+                    help='표를 내는 방식. auto: 병합 없으면 파이프 표, 병합 있으면 grid 표, 그래도 안 되면(그림·안쪽 표·열이 많음) tabularray / '
+                         'pipe: 파이프 표(병합·그림이 있으면 자리 표시) / grid: 모든 표를 grid 표로 / tblr: 모든 표를 tabularray 원문(\\begin{tblr}…)으로. '
+                         'tblr 는 테두리·바탕색·칸 너비·그림을 옮기지만 ndhmd 마크업은 쓸 수 없고(수식은 LaTeX 로 변환된 상태) 각주 안에서는 쓰지 못한다')
+    ap.add_argument('--tblr-args', default='', metavar='"…"',
+                    help='tblr 표를 만들 때 hwpx2tblr 에 넘길 옵션 (예: "--colspec linewidth --no-fills")')
     ap.add_argument('--no-grid-tables', dest='grid_tables', action='store_false',
-                    help='병합 셀이 있는 표를 grid 표로 내지 않고 자리 표시로 둔다')
+                    help='auto 에서 병합 셀이 있는 표를 grid 표로 내지 않는다 (tabularray 로 넘어간다)')
     ap.add_argument('--grid-max-cols', type=int, default=12, help='grid 표로 내는 표의 열 수 상한 (기본 12, 넘으면 자리 표시)')
     ap.add_argument('--no-table-conversion', '--table-conversion-false', dest='no_table_conversion', action='store_true',
                     help='표를 변환하려 하지 않고 칸 안의 글만 칸 순서대로 평문단으로 남긴다')
@@ -1319,6 +1475,7 @@ def main():
     ap.add_argument('--keep-cell-text', action='store_true', default=True)
     ap.add_argument('--no-cell-text', dest='keep_cell_text', action='store_false')
     ap.add_argument('--show-empty-shapes', action='store_true')
+    ap.add_argument('--layout', nargs='?', const='', metavar='FILE', help='쪽 설정(용지·여백·단·머리말/꼬리말·쪽 번호·쪽 나눔)을 JSON 으로 기록 (재현은 하지 않음; 기본 파일: 출력파일.layout.json)')
     ap.add_argument('--report', action='store_true')
     a = ap.parse_args()
     md, ctx = convert(a.input, a)
@@ -1332,13 +1489,17 @@ def main():
         fp = a.font_report or os.path.splitext(a.output)[0] + '.fonts.md'
         open(fp, 'w', encoding='utf8').write(font_report(ctx, a.input))
         print('서체 보고서:', fp, file=sys.stderr)
+    if a.layout is not None:
+        lp = a.layout or os.path.splitext(a.output or a.input)[0] + '.layout.json'
+        with open(lp, 'w', encoding='utf8') as fh: json.dump(layout_info(ctx, a.input), fh, ensure_ascii=False, indent=2)
+        print('쪽 설정 기록:', lp, file=sys.stderr)
     if a.report or a.output:
         print('통계:', dict(ctx.stats), file=sys.stderr)
         print('문단 스타일:', dict(ctx.used_styles), file=sys.stderr)
         for i, sc, m in ctx.display_list: print('  디스플레이 수식 #%d (점수 %d): %s' % (i, sc, m), file=sys.stderr)
         for ref, ext, a0, b0 in ctx.image_info: print('  그림 %s: %s %d바이트 -> %d바이트' % (ref, ext, a0, b0), file=sys.stderr)
         for ref, cm, wd in ctx.image_sizes: print('  크기 %s: %s -> %s' % (ref, '%.1fcm' % cm if cm else '기록 없음', wd), file=sys.stderr)
-        for w in ctx.warn: print('경고:', w, file=sys.stderr)
+        for w in ctx.warn + (sorted(set(ctx.tdoc.warn)) if ctx.tdoc is not None else []): print('경고:', w, file=sys.stderr)
         for src, m in hwpeq.WARN: print('경고: 수식 괄호 짝 보정 (%s): %s' % (src.strip()[:50], m), file=sys.stderr)
         if ctx.envs: print('환경 이름:', ctx.envs, file=sys.stderr)
         for i, sc, k, t in ctx.headings: print('  추정 헤딩 #%d (점수 %d, %s): %s' % (i, sc, k, t), file=sys.stderr)

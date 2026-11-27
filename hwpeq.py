@@ -329,8 +329,13 @@ class P:
           matrix : & 하나가 칸 하나 (&& 는 빈 칸) — 그대로 둔다
           cases  : 한 행의 첫 & 묶음만 값|조건의 열 구분(&)이고, && 도 & 하나로 합친다. 같은 행의 나머지 & 는 탭 간격(\\quad)
           eqalign: 첫 & 묶음이 정렬 위치(&), && 이면 큰 간격을 더한다 (rhwp 와 같은 규칙)"""
-        out = []; seen = False
+        cur = [0]
+        class L(list):
+            starts = []
+            def append(self, x): list.append(self, x); self.starts.append(cur[0])
+        out = L(); out.starts = []; seen = False
         while True:
+            cur[0] = s.i
             k, v = s.peek()
             if k is None: break
             if amp and (k, v) == ('ch', '&'):
@@ -349,9 +354,22 @@ class P:
             if stop == ')' and (k, v) == ('ch', ')'): break
             if k == 'cmd' and v.upper() in ('OVER', 'ATOP', 'CHOOSE'):
                 s.i += 1
-                num = str(out.pop()) if out else ''
-                den = str(s.element())
+                # 분자 = 앞쪽의, 공백으로 끊기지 않은 한 덩어리 (x+1 over 2 -> (x+1)/2,  x + 1 over 2 -> x + 1/2)
+                j = len(out) - 1
+                while j > 0 and out.starts[j] not in s.sp: j -= 1
+                j = max(j, 0)
+                num = ''.join(str(x) for x in out[j:]); start0 = out.starts[j] if out else s.i
+                del out[j:]; del out.starts[j:]
+                parts = [s.element()]                          # 분모도 공백 전까지 붙은 것 모두
+                while True:
+                    k2, v2 = s.peek()
+                    if k2 is None or s.i in s.sp: break
+                    if (k2, v2) in (('ch', '}'), ('ch', ']'), ('ch', ')'), ('ch', '`'), ('ch', '~'), ('ch', '&'), ('ch', '#')): break
+                    if k2 == 'cmd' and v2.upper() in ('RIGHT', 'OVER', 'ATOP', 'CHOOSE', 'OF'): break
+                    parts.append(s.element())
+                den = ''.join(str(x) for x in parts)
                 num, den = num.strip(), den.strip()
+                cur[0] = start0
                 if v.upper() == 'OVER': out.append(r'\frac{' + num + '}{' + den + '}')
                 elif v.upper() == 'ATOP': out.append(r'{' + num + r'\atop ' + den + '}')
                 else: out.append(r'\binom{' + num + '}{' + den + '}')

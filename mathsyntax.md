@@ -3,7 +3,7 @@
 hwpx2ndhmd 0.0.10 (`hwpeq.py`)이 한컴 수식 편집기의 스크립트를 LaTeX로 바꾸는 방식을 정리한 표입니다.
 "변환 결과" 열은 손으로 쓴 것이 아니라 `gen/gen_mathsyntax.py`가 `hwpeq.py`를 실제로 돌려 만든 값입니다.
 
-명령 이름의 뼈대(그리스 문자·기호·연산자·화살표·괄호·함수 표)는 [rhwp](https://github.com/edwardkim/rhwp)(MIT License, Copyright (c) 2025-2026 Edward Kim)의 `symbols.rs`에서 가져왔고, 첨자 인자의 범위나 `over`의 결합 범위 같은 규칙도 rhwp의 파서를 따랐습니다. 한컴 화면과 일대일로 비교해 본 것은 아닙니다.
+명령 이름의 뼈대(그리스 문자·기호·연산자·화살표·괄호·함수 표)는 [rhwp](https://github.com/edwardkim/rhwp)(MIT License, Copyright (c) 2025-2026 Edward Kim)의 `symbols.rs`에서 가져왔고, 첨자 인자의 범위나 `over`의 결합 범위 같은 규칙도 rhwp의 파서를 따랐습니다. 한컴 수식 문법은 Unix `eqn`(troff 전처리기)의 계통이라고 합니다. `over`의 결합 범위나 `sup`·`over`의 우선순위처럼 애매한 규칙은 `eqn` 매뉴얼을 참고할 수 있습니다. 한컴 화면과 일대일로 비교해 본 것은 아니며, 사용자가 한글에서 직접 확인한 규칙에는 "한글에서 확인함"이라고 적었습니다.
 
 ## 목차
 
@@ -15,7 +15,7 @@ hwpx2ndhmd 0.0.10 (`hwpeq.py`)이 한컴 수식 편집기의 스크립트를 LaT
 
 - **중괄호 억제.** 필요한 곳에만 중괄호를 씁니다. 한 글자 첨자는 `x^2`, 두 글자 이상은 `x^{n+1}`처럼 쓰고, `{…}` 그룹은 첨자의 밑이 될 때만 괄호로 감쌉니다.
 - **첨자 인자.** `{…}`가 아니면 공백, 닫는 괄호(`)`·`]`·`}`), `RIGHT`, 반대쪽 첨자 앞까지 붙은 토큰 전부가 인자입니다. 그래서 `x^2+1`은 `x^{2+1}`, `sum_i=1^n`은 `\sum_{i=1}^n`이 됩니다. 한컴 화면에서 의도와 다르게 보이는 수식이었다면 변환 결과도 같게 나옵니다.
-- **OVER·ATOP.** 직전 원소 하나와 직후 원소 하나를 묶습니다. 여러 항을 분자·분모로 쓰려면 `{…}`로 묶어야 합니다.
+- **OVER·ATOP.** 분자는 앞쪽의, 공백으로 끊기지 않은 한 덩어리이고 분모는 뒤쪽의 같은 덩어리입니다(`x+1 over 2`는 `(x+1)/2`, `x + 1 over 2`는 `x+1/2`). 덩어리 범위를 분명히 하려면 `{…}`로 묶으십시오.
 - **글꼴 전환.** `rm`, `it`, `bold`는 중괄호로 끊기지 않는 전역 전환입니다.
 - **대소문자.** 그리스 문자와 화살표 이름은 대소문자를 구분합니다(`alpha`와 `Alpha`는 다름). 그 밖의 기호·연산자·함수는 대문자로 한 번 더 찾습니다(`times`와 `TIMES` 모두 가능).
 - **붙여 쓴 키워드.** `sinx`, `overa`, `leqb`처럼 붙은 이름은 알려진 키워드 단위로 나눕니다.
@@ -34,7 +34,7 @@ hwpx2ndhmd 0.0.10 (`hwpeq.py`)이 한컴 수식 편집기의 스크립트를 LaT
 | <code>x_{i+1}^{n}</code> | <code>x_{i+1}^n</code> | 아래·위 첨자 함께 |
 | <code>x^{n+1}</code> | <code>x^{n+1}</code> | 중괄호로 묶은 인자 |
 | <code>x^2 +1</code> | <code>x^2+1</code> | 공백에서 첨자 인자가 끝남 |
-| <code>x^2+1</code> | <code>x^{2+1}</code> | 붙여 쓰면 `2+1` 전체가 위첨자 (한컴 규칙) |
+| <code>x^2+1</code> | <code>x^{2+1}</code> | 붙여 쓰면 `2+1` 전체가 위첨자 (한글에서 확인함) |
 | <code>sum_i=1^n a_i</code> | <code>\sum_{i=1}^na_i</code> | `_`의 인자는 반대쪽 첨자 `^` 앞까지 |
 | <code>sum_{i=1}^n a_i</code> | <code>\sum_{i=1}^na_i</code> |  |
 | <code>2^{-k}</code> | <code>2^{-k}</code> |  |
@@ -47,7 +47,9 @@ hwpx2ndhmd 0.0.10 (`hwpeq.py`)이 한컴 수식 편집기의 스크립트를 LaT
 | --- | --- | --- |
 | <code>{a+b} over {c}</code> | <code>\frac{a+b}{c}</code> | `over`는 직전 원소와 직후 원소를 묶는다 |
 | <code>a over b</code> | <code>\frac{a}{b}</code> |  |
-| <code>x+1 over 2</code> | <code>x+\frac{1}{2}</code> | 직전 원소(`1`)만 분자가 된다 |
+| <code>x+1 over 2</code> | <code>\frac{x+1}{2}</code> | 붙여 쓴 `x+1`이 통째로 분자 (한글에서 확인함) |
+| <code>x + 1 over 2</code> | <code>x+\frac{1}{2}</code> | 띄어 쓰면 직전 원소(`1`)만 분자 (한글에서 확인함) |
+| <code>a+b over c+d</code> | <code>\frac{a+b}{c+d}</code> | 분모도 공백 전까지 붙은 것 모두 |
 | <code>{x+1} over 2</code> | <code>\frac{x+1}{2}</code> |  |
 | <code>{1 over 2} over 3</code> | <code>\frac{\frac{1}{2}}{3}</code> |  |
 | <code>a atop b</code> | <code>{a\atop b}</code> | `atop`: 분수선 없는 위아래 쌓기 |
