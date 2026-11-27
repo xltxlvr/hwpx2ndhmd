@@ -12,7 +12,7 @@ import xml.etree.ElementTree as ET
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import hwpeq
 
-__version__ = '0.0.22'
+__version__ = '0.0.23'
 
 PN = 'http://www.hancom.co.kr/hwpml/2011/paragraph'
 HN = 'http://www.hancom.co.kr/hwpml/2011/head'
@@ -1289,7 +1289,7 @@ def font_report(ctx, src):
     if lines:
         out += ['', '## LaTeX 참고', '',
                 '계열(rm/sf)과 글자 종류별로 가장 많이 쓰인 서체입니다. 명령 이름은 luatexko·kotex 계열 기준의 예시이니 환경에 맞게 고쳐 쓰세요.', '',
-                '```latex'] + lines + ['```']
+                '```'] + lines + ['```']
     if ctx.stats.get('sf_drops_italic') or ctx.stats.get('rm_in_sf_skipped'):
         out += ['', '## 표시하지 못한 서식', '']
         if ctx.stats.get('sf_drops_italic'): out.append('- sans 이면서 기울임 %d곳: sans 기울임 문법이 없어 기울임은 버렸습니다.' % ctx.stats['sf_drops_italic'])
