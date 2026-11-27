@@ -83,6 +83,7 @@ class Toks(list):
         self.pos.append(self.cur)
 
 
+OPERATORS = ('inf', 'sup', 'liminf', 'limsup')     # 한글에는 전용 명령이 없어 rm "inf" 처럼 씀
 CHUNK = 9        # 한글은 공백 없이 붙은 덩어리가 9글자를 넘으면 9글자 뒤에서 끊어 읽는다 (한글에서 확인함; OVER 의 분자)
 
 
@@ -271,7 +272,10 @@ class P:
         if (k, v) == ('ch', '{'): return G(s.group())
         s.i += 1
         if k == 'num': return v
-        if k == 'txt': return r'\text{' + text_escape(v) + '}'
+        if k == 'txt':                                    # "…" : 한글에서는 기본이 이탤릭, rm 이어야 로만체 (한글에서 확인함)
+            if s.font == 'rm' and v.strip() in OPERATORS: return '\\' + v.strip() + ' '      # rm "inf" -> \inf (아래첨자가 밑에 붙도록)
+            wrap = {'rm': r'\text{', 'bold': r'\textbf{'}.get(s.font, r'\textit{' if v.isascii() else r'\text{')   # 한글 글자는 기울이지 않음
+            return wrap + text_escape(v) + '}'
         if k == 'na': return r'\text{' + text_escape(v) + '}'
         if k == 'arrow': return r'\to ' if v == '->' else r'\leftarrow '
         if k == 'id': return s.wrap_font(v)

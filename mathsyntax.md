@@ -3,7 +3,7 @@
 hwpx2ndhmd 0.0.10 (`hwpeq.py`)이 한컴 수식 편집기의 스크립트를 LaTeX로 바꾸는 방식을 정리한 표입니다.
 "변환 결과" 열은 손으로 쓴 것이 아니라 `gen/gen_mathsyntax.py`가 `hwpeq.py`를 실제로 돌려 만든 값입니다.
 
-명령 이름의 뼈대(그리스 문자·기호·연산자·화살표·괄호·함수 표)는 [rhwp](https://github.com/edwardkim/rhwp)(MIT License, Copyright (c) 2025-2026 Edward Kim)의 `symbols.rs`에서 가져왔고, 첨자 인자의 범위나 `over`의 결합 범위 같은 규칙도 rhwp의 파서를 따랐습니다. 한컴 수식 문법은 Unix `eqn`(troff 전처리기)의 계통이라고 합니다(한글 개발자의 증언에 따름). `over`의 결합 범위나 `sup`·`over`의 우선순위처럼 애매한 규칙은 `eqn` 매뉴얼을 참고할 수 있습니다. 한컴 화면과 일대일로 비교해 본 것은 아니며, 사용자가 한글에서 직접 확인한 규칙에는 "한글에서 확인함"이라고 적었습니다.
+명령 이름의 뼈대(그리스 문자·기호·연산자·화살표·괄호·함수 표)는 [rhwp](https://github.com/edwardkim/rhwp)(MIT License, Copyright (c) 2025-2026 Edward Kim)의 `symbols.rs`에서 가져왔고, 첨자 인자의 범위나 `over`의 결합 범위 같은 규칙도 rhwp의 파서를 따랐습니다. 한컴 수식 문법은 Unix `eqn`(troff 전처리기)의 계통이라고 합니다. `over`의 결합 범위나 `sup`·`over`의 우선순위처럼 애매한 규칙은 `eqn` 매뉴얼을 참고할 수 있습니다. 한컴 화면과 일대일로 비교해 본 것은 아니며, 사용자가 한글에서 직접 확인한 규칙에는 "한글에서 확인함"이라고 적었습니다.
 
 ## 목차
 
@@ -190,10 +190,13 @@ hwpx2ndhmd 0.0.10 (`hwpeq.py`)이 한컴 수식 편집기의 스크립트를 LaT
 | <code>bold v</code> | <code>\mathbf{v}</code> |  |
 | <code>a&#96;b</code> | <code>a\,b</code> | `` ` `` : 가는 공백 |
 | <code>a~b</code> | <code>a\ b</code> | `~` : 공백 |
-| <code>"hello" x</code> | <code>\text{hello}x</code> | 따옴표 안은 글자 그대로 |
+| <code>"hello" x</code> | <code>\textit{hello}x</code> | 따옴표 안은 글자 그대로. 기본은 이탤릭 (한글에서 확인함) |
+| <code>rm "hello" x</code> | <code>\text{hello}\mathrm{x}</code> | `rm`이면 로만체 |
+| <code>"inf"_{x in A} f(x)</code> | <code>\textit{inf}_{x\in A}f(x)</code> | `inf`는 무한대 기호이므로 인피멈은 따옴표 글로 쓰는데, 이탤릭이 됨 (한글에서 확인함) |
+| <code>rm "inf" rm "sup" f</code> | <code>\inf\sup\mathrm{f}</code> | `rm "inf"`·`rm "sup"`·`rm "liminf"`·`rm "limsup"`이 연산자 `\inf`·`\sup`·`\liminf`·`\limsup` (한글에서 확인함) |
 | <code>x 가 y</code> | <code>x\text{가}y</code> | 한글 등은 `\text{…}` |
 | <code>95 %</code> | <code>95\%</code> | LaTeX 특수문자 `%` `$`는 수식 안에서 `\%` `\$`로 이스케이프 (ndhmd4tex 는 수식 안을 그대로 둔다) |
-| <code>"50% of $x_1$"</code> | <code>\text{50\% of \$x\_1\$}</code> | 따옴표 글 안의 `% $ # & _ ^ ~ { } \`도 이스케이프 |
+| <code>"50% of $x_1$"</code> | <code>\textit{50\% of \$x\_1\$}</code> | 따옴표 글 안의 `% $ # & _ ^ ~ { } \`도 이스케이프 |
 | <code>a -&gt; b</code> | <code>a\to b</code> |  |
 | <code>a rarrow b</code> | <code>a\rightarrow b</code> |  |
 | <code>a lrarrow b</code> | <code>a\leftrightarrow b</code> |  |
