@@ -186,13 +186,14 @@ hwpx2ndhmd 0.0.10 (`hwpeq.py`)이 한컴 수식 편집기의 스크립트를 LaT
 
 | 한컴 수식 | 변환 결과 (LaTeX) | 비고 |
 | --- | --- | --- |
-| <code>rm AB it x</code> | <code>\mathrm{AB}x</code> | `rm`·`it`·`bold`는 이후 전체에 적용되는 전환 (한컴 규칙) |
+| <code>rm AB it x</code> | <code>\mathrm{AB}x</code> | `rm`·`it`·`bold`는 이후 전체에 적용되는 전환 (한글에서 확인함) |
 | <code>bold v</code> | <code>\mathbf{v}</code> |  |
 | <code>a&#96;b</code> | <code>a\,b</code> | `` ` `` : 가는 공백 |
 | <code>a~b</code> | <code>a\ b</code> | `~` : 공백 |
 | <code>"hello" x</code> | <code>\textit{hello}x</code> | 따옴표 안은 글자 그대로. 기본은 이탤릭 (한글에서 확인함) |
 | <code>rm "hello" x</code> | <code>\text{hello}\mathrm{x}</code> | `rm`이면 로만체 |
 | <code>"inf"_{x in A} f(x)</code> | <code>\textit{inf}_{x\in A}f(x)</code> | `inf`는 무한대 기호이므로 인피멈은 따옴표 글로 쓰는데, 이탤릭이 됨 (한글에서 확인함) |
+| <code>rm "inf"_{x in A} f(x)</code> | <code>\inf_{\mathrm{x}\in\mathrm{A}}\mathrm{f}(\mathrm{x})</code> | `rm`은 전역이라 뒤의 `x`, `f`도 모두 로만체 (한글에서 확인함) |
 | <code>rm "inf" rm "sup" f</code> | <code>\inf\sup\mathrm{f}</code> | `rm "inf"`·`rm "sup"`·`rm "liminf"`·`rm "limsup"`이 연산자 `\inf`·`\sup`·`\liminf`·`\limsup` (한글에서 확인함) |
 | <code>x 가 y</code> | <code>x\text{가}y</code> | 한글 등은 `\text{…}` |
 | <code>95 %</code> | <code>95\%</code> | LaTeX 특수문자 `%` `$`는 수식 안에서 `\%` `\$`로 이스케이프 (ndhmd4tex 는 수식 안을 그대로 둔다) |
