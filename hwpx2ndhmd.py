@@ -12,7 +12,7 @@ import xml.etree.ElementTree as ET
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import hwpeq
 
-__version__ = '0.0.21'
+__version__ = '0.0.22'
 
 PN = 'http://www.hancom.co.kr/hwpml/2011/paragraph'
 HN = 'http://www.hancom.co.kr/hwpml/2011/head'
@@ -1366,7 +1366,7 @@ def layout_info(ctx, src):
     def attrs(e): return {k: v for k, v in e.attrib.items()}
     def sub(e): return [dict(tag=c.tag.split('}')[-1], **attrs(c)) for c in e]
     def text_of(e): return ' / '.join(t for t in (''.join(pp.itertext()).strip() for pp in e.iter(p_('p'))) if t)
-    out = dict(source=os.path.basename(src), note='참고용 기록입니다. 길이는 mm(원래 값은 *_hu, 1/7200 인치), 위치는 최상위 문단 번호(1부터)입니다.',
+    out = dict(source=os.path.basename(src), note='참고용 기록입니다. 길이는 mm(원래 값은 *_hu, 1/7200 인치), 위치는 최상위 문단 번호(1부터)입니다. geometry_hint 의 top·bottom 은 위쪽+머리말, 아래쪽+꼬리말(본문이 시작·끝나는 자리)입니다.',
                sections=[], columns=[], headers_footers=[], page_numbers=[], page_hiding=[], page_breaks=[])
     n = 0
     for si, root in enumerate(ctx.roots, 1):
@@ -1387,7 +1387,7 @@ def layout_info(ctx, src):
                     if pg is not None:
                         m = d['margins_mm']; lscape = d['orientation'] == 'landscape'
                         d['geometry_hint'] = '\\geometry{paperwidth=%gmm,paperheight=%gmm,left=%gmm,right=%gmm,top=%gmm,bottom=%gmm}' % (
-                            round(d['paper_width_mm'], 1), round(d['paper_height_mm'], 1), round(m['left'] + m['gutter'], 1), m['right'], m['top'], m['bottom'])
+                            round(d['paper_width_mm'], 1), round(d['paper_height_mm'], 1), round(m['left'] + m['gutter'], 1), m['right'], round(m['top'] + m['header'], 1), round(m['bottom'] + m['footer'], 1))
                 st = sp.find(p_('startNum')); vi = sp.find(p_('visibility')); bf = sp.findall(p_('pageBorderFill'))
                 if st is not None: d['start_num'] = attrs(st)
                 if vi is not None: d['visibility'] = attrs(vi)
