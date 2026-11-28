@@ -12,7 +12,7 @@ import xml.etree.ElementTree as ET
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import hwpeq
 
-__version__ = '0.0.28'
+__version__ = '0.0.29'
 
 PN = 'http://www.hancom.co.kr/hwpml/2011/paragraph'
 HN = 'http://www.hancom.co.kr/hwpml/2011/head'
@@ -906,6 +906,27 @@ def display_math(ctx, text):
 
 
 # ===================== 변환 =====================
+def pull_note_refs(txt):
+    """제목 줄에서 각주·미주 참조(`[^1]`, `[^1]{end}`, 인라인 `^[글]`)를 떼어 낸다 -> (참조를 뺀 글, 참조 목록).
+    제목 속 각주는 목차·쪽 머리에 딸려 가 문제가 되므로 제목 바로 다음 줄로 옮긴다."""
+    refs = []; out = []; i = 0
+    while i < len(txt):
+        m = re.compile(r'\[\^[^\]\s]+\](?:\{end\})?').match(txt, i)
+        if m: refs.append(m.group()); i = m.end(); continue
+        if txt.startswith('^[', i):
+            d = 0; j = i + 1
+            while j < len(txt):
+                if txt[j] == '\\': j += 2; continue
+                if txt[j] == '[': d += 1
+                elif txt[j] == ']':
+                    d -= 1
+                    if d == 0: break
+                j += 1
+            if j < len(txt): refs.append(txt[i:j + 1]); i = j + 1; continue
+        out.append(txt[i]); i += 1
+    return ''.join(out), refs
+
+
 def lsafe(s):
     """문단 첫머리가 마크다운 목록·제목·인용으로 읽히지 않게 한다.
     글로 쓴 번호 '1. ' / '2)' 는 {1}. 꼴로(문단 번호와 같은 방식), '* ' '- ' '+ ' '# ' '> ' 는 역슬래시로 막는다."""
@@ -1163,7 +1184,10 @@ def convert(path, a):
         txt = normalize_para_text(text, ctx.a.keep_linebreaks).strip()
         blocks = [s for k, s in parts if k == 'b']
         if role[0] == 'h' and txt:
-            emit(('plain',), '#' * role[1] + ' ' + ' '.join(txt.split()))
+            htxt, refs = pull_note_refs(txt)
+            if not htxt.strip(): htxt, refs = txt, []              # 각주만 있는 제목은 그대로
+            emit(('plain',), '#' * role[1] + ' ' + ' '.join(htxt.split()))
+            if refs: emit(('plain',), ' '.join(refs)); ctx.stats['h_note_moved'] += len(refs)      # 제목 줄에는 각주를 두지 않고 바로 다음 줄로
             for b in blocks: emit(('plain',), b)
             continue
         # 일반/환경 문단: 글과 블록을 원래 순서로 (글 덩어리 = 한 문단)
