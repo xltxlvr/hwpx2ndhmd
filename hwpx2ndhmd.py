@@ -12,7 +12,7 @@ import xml.etree.ElementTree as ET
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import hwpeq
 
-__version__ = '0.0.24'
+__version__ = '0.0.25'
 
 PN = 'http://www.hancom.co.kr/hwpml/2011/paragraph'
 HN = 'http://www.hancom.co.kr/hwpml/2011/head'
@@ -88,6 +88,8 @@ class Ctx:
         self.styles = {s.get('id'): s for s in hd.iter(h_('style'))}
         self.parapr = {p.get('id'): p for p in hd.iter(h_('paraPr'))}
         self.charpr = {c.get('id'): c for c in hd.iter(h_('charPr'))}
+        self.borderfill = {b.get('id'): b for b in hd.iter(h_('borderFill'))}
+        self.body_size = 1000
         self.fontfaces = {ff.get('lang'): {f.get('id'): f.get('face') for f in ff.findall(h_('font'))} for ff in hd.iter(h_('fontface'))}
         self._sans = {}; self.used_underline = False; self.roots = []
         self.sans_extra = [x.strip() for x in (a.sans_fonts or '').split(',') if x.strip()]
@@ -1049,6 +1051,7 @@ def convert(path, a):
             n = len(''.join(x.text or '' for x in run.findall(p_('t'))).strip())
             if n: sz[ctx.char_props(run)[0]] += n
     body_size = sz.most_common(1)[0][0] if sz else 1000
+    ctx.body_size = body_size
     ctx.body_font = body_size
 
     info = []   # 문단별: parts, text, kind(스타일 종류), 값
@@ -1304,6 +1307,64 @@ def font_report(ctx, src):
     return '\n'.join(out) + '\n'
 
 
+def style_advice(ctx, name):
+    """스타일의 원래 모양을 환경 틀을 채울 때 참고하도록 (설명, LaTeX 힌트) 로 돌려준다. 재현이 아니라 참고용."""
+    st = next((x for x in ctx.styles.values() if x.get('name') == name), None)
+    if st is None: return '', ''
+    pr = ctx.parapr.get(st.get('paraPrIDRef')); cp = ctx.charpr.get(st.get('charPrIDRef'))
+    mm = lambda v: round(int(v) * 25.4 / 7200, 1)
+    desc, hint = [], []
+    if cp is not None:
+        pt = int(cp.get('height') or 0) / 100
+        base = ctx.body_size / 100
+        if pt:
+            desc.append('글자 %gpt' % pt)
+            r = pt / base if base else 1
+            for lim, cmd in ((0.7, r'\tiny'), (0.85, r'\footnotesize'), (0.95, r'\small'), (1.12, ''), (1.3, r'\large'), (1.6, r'\Large'), (2.0, r'\LARGE')):
+                if r < lim:
+                    if cmd: hint.append(cmd)
+                    break
+            else: hint.append(r'\huge')
+        if cp.find(h_('bold')) is not None: desc.append('굵게'); hint.append(r'\bfseries')
+        if cp.find(h_('italic')) is not None: desc.append('기울임'); hint.append(r'\itshape')
+        ul = cp.find(h_('underline'))
+        if ul is not None and ul.get('type') not in (None, 'NONE'): desc.append('밑줄')
+        col = (cp.get('textColor') or '#000000').upper()
+        if col not in ('#000000', 'NONE'): desc.append('글자색 ' + col); hint.append('\\color[HTML]{%s}' % col[1:])
+        rt = cp.find(h_('ratio')); sp = cp.find(h_('spacing'))
+        if rt is not None and rt.get('hangul') not in (None, '100'): desc.append('장평 %s%%' % rt.get('hangul'))
+        if sp is not None and sp.get('hangul') not in (None, '0'): desc.append('자간 %s%%' % sp.get('hangul'))
+        fc = ctx.face(cp, 'hangul')
+        if fc: desc.append('글꼴 ' + fc)
+    if pr is not None:
+        al = pr.find(h_('align')); a = al.get('horizontal') if al is not None else ''
+        names = {'LEFT': '왼쪽 정렬', 'RIGHT': '오른쪽 정렬', 'CENTER': '가운데 정렬', 'DISTRIBUTE': '배분 정렬', 'DISTRIBUTE_SPACE': '나눔 정렬'}
+        if a in names:
+            desc.append(names[a]); hint.append({'LEFT': r'\raggedright', 'RIGHT': r'\raggedleft', 'CENTER': r'\centering'}.get(a, ''))
+        mg = pr.find('.//' + h_('margin'))
+        if mg is not None:
+            g = lambda k: mg.find('{*}' + k)
+            def val(k):
+                e = g(k); return int(e.get('value') or 0) if e is not None else 0
+            if val('left'): desc.append('왼쪽 여백 %gmm' % mm(val('left'))); hint.append('\\leftskip=%gmm' % mm(val('left')))
+            if val('right'): desc.append('오른쪽 여백 %gmm' % mm(val('right'))); hint.append('\\rightskip=%gmm' % mm(val('right')))
+            if val('intent'): desc.append('%s %gmm' % ('첫 줄 들여쓰기' if val('intent') > 0 else '내어쓰기', abs(mm(val('intent'))))); hint.append('\\parindent=%gmm' % mm(val('intent')))
+            if val('prev') or val('next'): desc.append('문단 앞 %gmm 뒤 %gmm' % (mm(val('prev')), mm(val('next'))))
+        ls = pr.find('.//' + h_('lineSpacing'))
+        if ls is not None and ls.get('type') == 'PERCENT' and ls.get('value') not in (None, '160'): desc.append('줄 간격 %s%%' % ls.get('value'))
+        br = pr.find(h_('breakSetting'))
+        if br is not None and br.get('pageBreakBefore') == '1': desc.append('앞에서 쪽 나눔')
+        bd = pr.find(h_('border')); bf = ctx.borderfill.get(bd.get('borderFillIDRef')) if bd is not None else None
+        if bf is not None:
+            sides = [x for x in ('leftBorder', 'rightBorder', 'topBorder', 'bottomBorder') if bf.find(h_(x)) is not None and bf.find(h_(x)).get('type') not in (None, 'NONE')]
+            fill = bf.find('.//' + '{*}winBrush')
+            fillc = fill.get('faceColor') if fill is not None and fill.get('faceColor') not in (None, 'none') else None
+            if len(sides) == 4: desc.append('네 변 테두리'); hint.append('상자(tcolorbox, \\fbox 등)')
+            elif sides: desc.append('테두리(%s)' % ', '.join({'leftBorder': '왼', 'rightBorder': '오른', 'topBorder': '위', 'bottomBorder': '아래'}[x] for x in sides))
+            if fillc: desc.append('바탕색 ' + fillc)
+    return ', '.join(desc), ' '.join(h for h in hint if h)
+
+
 def env_table_tex(ctx, src):
     """스타일 이름 -> 환경 이름 대응표(주석)와, 한꺼번에 정의하는 \\newenvironment 목록.
     이미 정의된 환경이면 건드리지 않도록 \\ifcsname 으로 감싼다 (quote 같은 기본 환경과 충돌하지 않게)."""
@@ -1315,6 +1376,9 @@ def env_table_tex(ctx, src):
         L.append('%%   %-*s -> %-24s (%d문단)' % (w, k, v, ctx.used_styles.get(k, 0)))
     L.append('')
     for k, v in names:
+        desc, hint = style_advice(ctx, k)
+        if desc: L.append('%% %s: 원래 모양 %s' % (v, desc))
+        if hint: L.append('%% %s: LaTeX 참고 %s' % (v, hint))
         L.append('\\ifcsname %s\\endcsname\\else\\newenvironment{%s}{}{}\\fi %% %s' % (v, v, k))
     return '\n'.join(L) + '\n'
 

@@ -67,6 +67,8 @@ python hwpx2ndhmd.py --version
 \ifcsname yeonseubmunje\endcsname\else\newenvironment{yeonseubmunje}{}{}\fi % 연습문제
 ```
 
+`.envs.tex`에는 환경마다 원래 스타일의 모양(글자 크기·굵기·색, 정렬, 여백·들여쓰기, 문단 간격, 줄 간격, 테두리·바탕색)을 설명하는 주석과 이를 LaTeX 로 옮길 때 참고할 명령(`\centering`, `\leftskip=…` 등)이 붙습니다. 모양을 재현하는 것이 아니라 환경을 채울 때 참고하라는 조언이며, 값이 한글의 기본값과 같은 항목은 생략됩니다.
+
 `--env-in-preamble`을 주면 이 목록을 front matter 의 `preamble+:`에도 넣고, `--env-input`을 주면 목록 대신 `\input{출력파일.envs.tex}` 한 줄을 넣습니다(대응표 파일을 그대로 불러 쓰므로 환경 모양은 그 파일에서 고치면 됩니다). 중첩된 환경은 바깥·안쪽 모두 `:::`로 냅니다(`::::`는 쓰지 않음).
 
 ### 헤딩
@@ -241,8 +243,7 @@ python hwpx2ndhmd.py --version
 | 파일 | 설명 |
 |---|---|
 | `hwpx2ndhmd.py` | 본체 (명령줄 도구) |
-| `hwpx2tblr.py` | 표 → tabularray 변환기 (`--table tblr`가 불러 씀. [hwpx2tblr](../hwpx2tblr)의 같은 파일이며 단독으로도 돈다) |
-| `tests/` | 시험 (`python3 -m unittest discover -s tests`; ndhmd4tex.py 와 xelatex 가 있으면 조판까지 확인. 환경변수 `NDHMD4TEX`로 위치 지정) |
+| `hwpx2tblr.py` | 표 → tabularray 변환기 (`--table tblr`가 불러 씀.) |
 | `hwpeq.py` | 한컴 수식 → LaTeX 변환기 (단독으로 `import hwpeq; hwpeq.convert(…)`로도 쓸 수 있음) |
 | `hwpeq_tables.py` | 명령 이름 표 (`gen/gen_tables.py`가 만든 것이라 직접 고치지 않음) |
 | `gen/gen_tables.py` | rhwp 의 `symbols.rs`에서 `hwpeq_tables.py`를 만드는 생성기 (실행에만 `pylatexenc` 필요) |
