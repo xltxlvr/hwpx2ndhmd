@@ -12,7 +12,7 @@ import xml.etree.ElementTree as ET
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import hwpeq
 
-__version__ = '0.0.29'
+__version__ = '0.0.40'
 
 PN = 'http://www.hancom.co.kr/hwpml/2011/paragraph'
 HN = 'http://www.hancom.co.kr/hwpml/2011/head'
@@ -399,6 +399,75 @@ def bmp24_to_png(raw, frac):
             + _png_chunk(b'IDAT', zlib.compress(data, 9)) + _png_chunk(b'IEND', b''))
 
 
+def find_inkscape(ctx):
+    """Inkscape 실행 파일 경로(없으면 None). --inkscape 경로 > PATH > Windows 설치 위치. 한 번만 찾는다."""
+    if hasattr(ctx, '_inkscape'): return ctx._inkscape
+    import shutil
+    cands = [ctx.a.inkscape] if ctx.a.inkscape else []
+    cands += [shutil.which('inkscape')] if not ctx.a.no_inkscape else []
+    for base in (os.environ.get('ProgramFiles'), os.environ.get('ProgramFiles(x86)')):
+        if base and not ctx.a.no_inkscape:
+            cands += [os.path.join(base, 'Inkscape', 'bin', n) for n in ('inkscape.com', 'inkscape.exe')]
+    ctx._inkscape = next((c for c in cands if c and os.path.isfile(c)), None)
+    if ctx.a.no_inkscape and not ctx.a.inkscape: ctx._inkscape = None
+    return ctx._inkscape
+
+
+def inkscape_to_png(ctx, raw, ext, out_png):
+    """WMF/EMF 를 Inkscape 로 PNG 로 바꾼다. 성공하면 True (실패 이유는 경고에 남긴다)."""
+    exe = find_inkscape(ctx)
+    if not exe: return False
+    import subprocess, tempfile
+    with tempfile.TemporaryDirectory() as td:
+        src = os.path.join(td, 'in' + ext); open(src, 'wb').write(raw)
+        try:
+            r = subprocess.run([exe, src, '--export-type=png', '--export-filename=' + out_png, '--export-dpi=200',
+                                '--export-background=white', '--export-background-opacity=1'],
+                               capture_output=True, text=True, timeout=ctx.a.inkscape_timeout)
+        except Exception as e:
+            ctx.warn.append('Inkscape 로 %s 를 바꾸지 못했습니다: %s' % (ext, e)); return False
+    ok = r.returncode == 0 and os.path.isfile(out_png) and os.path.getsize(out_png) > 0
+    if not ok: ctx.warn.append('Inkscape 가 %s 를 PNG 로 바꾸지 못했습니다: %s' % (ext, (r.stderr or r.stdout or '').strip().splitlines()[-1:] or r.returncode))
+    return ok
+
+
+def find_magick(ctx):
+    """ImageMagick 7 의 magick 실행 파일(없으면 None). convert 는 Windows 의 다른 프로그램과 겹치므로 쓰지 않는다."""
+    if hasattr(ctx, '_magick'): return ctx._magick
+    import shutil, glob
+    cands = [ctx.a.imagemagick] if ctx.a.imagemagick else []
+    if not ctx.a.no_imagemagick:
+        cands.append(shutil.which('magick'))
+        for base in (os.environ.get('ProgramFiles'), os.environ.get('ProgramFiles(x86)')):
+            if base: cands += sorted(glob.glob(os.path.join(base, 'ImageMagick*', 'magick.exe')), reverse=True)
+    ctx._magick = next((c for c in cands if c and os.path.isfile(c)), None)
+    if ctx.a.no_imagemagick and not ctx.a.imagemagick: ctx._magick = None
+    return ctx._magick
+
+
+def magick_to_png(ctx, raw, ext, out_png):
+    """WMF/EMF 를 ImageMagick(magick)으로 PNG 로 바꾼다 (Windows 에서는 GDI 로 그려 읽는다; 해상도는 낮을 수 있고 -density 는 효과가 없다고 보고됨)."""
+    exe = find_magick(ctx)
+    if not exe: return False
+    import subprocess, tempfile
+    with tempfile.TemporaryDirectory() as td:
+        src = os.path.join(td, 'in' + ext); open(src, 'wb').write(raw)
+        try:
+            r = subprocess.run([exe, src, out_png], capture_output=True, text=True, timeout=ctx.a.inkscape_timeout)
+        except Exception as e:
+            ctx.warn.append('magick 으로 %s 를 바꾸지 못했습니다: %s' % (ext, e)); return False
+    ok = r.returncode == 0 and os.path.isfile(out_png) and os.path.getsize(out_png) > 0
+    if not ok: ctx.warn.append('magick 이 %s 를 PNG 로 바꾸지 못했습니다: %s' % (ext, (r.stderr or r.stdout or '').strip().splitlines()[-1:] or r.returncode))
+    return ok
+
+
+def metafile_to_png(ctx, raw, ext, out_png):
+    """Inkscape 를 먼저, 안 되면 magick 을 시도한다. -> 쓴 도구 이름 또는 None"""
+    if inkscape_to_png(ctx, raw, ext, out_png): return 'Inkscape'
+    if magick_to_png(ctx, raw, ext, out_png): return 'magick'
+    return None
+
+
 def save_image(ctx, pic, ref):
     """BinData 그림을 꺼내 PNG 로 저장하고 md 에서 쓸 경로를 돌려준다 (BMP -> PNG, 잘라내기 반영).
     Pillow 가 있으면 그것을, 없으면 24비트 BMP 에 한해 순수 파이썬으로 변환한다. 나머지는 원본 그대로 저장하고 경고한다."""
@@ -432,6 +501,14 @@ def save_image(ctx, pic, ref):
                 fn = name + '.png'; im.save(os.path.join(outdir, fn), optimize=True); how = 'Pillow'
         except Exception as e:
             ctx.warn.append('그림 %s(%s) 를 Pillow 로 열지 못했습니다: %s' % (ref, ext, e))
+    tool = metafile_to_png(ctx, raw, ext, os.path.join(outdir, name + '.png')) if fn is None and ext in ('.wmf', '.emf') else None
+    if tool:
+        fn = name + '.png'; how = tool; ctx.stats['img_inkscape' if tool == 'Inkscape' else 'img_magick'] += 1
+        if Image is not None and frac:                                  # 잘라내기는 만들어진 PNG 에 적용
+            try:
+                im = Image.open(os.path.join(outdir, fn)); im.load()
+                im.crop((round(frac[0] * im.width), round(frac[1] * im.height), round(frac[2] * im.width), round(frac[3] * im.height))).save(os.path.join(outdir, fn))
+            except Exception as e: ctx.warn.append('그림 %s: 잘라내기를 적용하지 못했습니다: %s' % (ref, e))
     if fn is None:
         png = bmp24_to_png(raw, frac) if ext == '.bmp' else None
         if png is not None:
@@ -441,7 +518,7 @@ def save_image(ctx, pic, ref):
             if frac: ctx.warn.append('그림 %s: Pillow 가 없어 잘라내기를 적용하지 못했습니다 (원본 그대로 저장).' % ref)
         else:
             fn = name + ext; open(os.path.join(outdir, fn), 'wb').write(raw); ctx.stats['img_raw'] += 1
-            ctx.warn.append('그림 %s(%s) 는 PNG 로 바꾸지 못해 원본 그대로 저장했습니다 (Pillow 를 설치하면 더 많은 형식을 바꿀 수 있습니다).' % (ref, ext))
+            ctx.warn.append('그림 %s(%s) 는 PNG 로 바꾸지 못해 원본 그대로 저장했습니다%s.' % (ref, ext, ' — 삽입 명령은 주석으로 막아 두었으니 PNG 로 바꾼 뒤 주석을 푸세요 (Inkscape·LibreOffice 로 바꿀 수 있습니다)' if ext in ('.wmf', '.emf') else ' (Pillow 를 설치하면 더 많은 형식을 바꿀 수 있습니다)'))
     if frac and how: ctx.stats['img_cropped'] += 1
     ctx.stats['img_saved'] += 1
     ctx.image_info.append((ref, ext.lstrip('.'), len(raw), os.path.getsize(os.path.join(outdir, fn))))
@@ -477,7 +554,11 @@ def image_md(ctx, pic, p, frame_w=None):
     if not path: return '<!-- PIC: %s (그림 파일 없음) -->' % ref
     width, cm = image_width(ctx, pic, frame_w)
     ctx.image_sizes.append((ref, cm, width))
-    return '![%s](%s){width=%s}' % (image_caption(ctx, pic, p), path, width)
+    md = '![%s](%s){width=%s}' % (image_caption(ctx, pic, p), path, width)
+    if path.lower().endswith(('.wmf', '.emf')):          # LaTeX 가 읽지 못하는 메타파일: 삽입 명령을 주석으로 막아 자리만 남긴다 (PNG 로 바꾼 뒤 주석을 풀면 된다)
+        ctx.stats['img_metafile'] += 1
+        return '<!-- %s -->' % md.replace('--', '- -')
+    return md
 
 
 # ===================== 인라인 / 블록 =====================
@@ -1529,6 +1610,11 @@ def main():
     ap.add_argument('--image-max', type=float, default=0.75, help='auto 일 때 폭 상한 (기본 0.75)')
     ap.add_argument('--image-dir', default='.', help='그림을 저장할 폴더 (출력 파일 기준 상대 경로, 기본 같은 폴더)')
     ap.add_argument('--image-prefix', default='', help='그림 파일 이름 앞에 붙일 글 (예: ch1-)')
+    ap.add_argument('--inkscape', metavar='경로', default='', help='WMF·EMF 를 PNG 로 바꿀 Inkscape 실행 파일 (기본: PATH 와 Windows 설치 위치에서 찾아, 있으면 씀. 없으면 삽입 명령을 주석으로 막음)')
+    ap.add_argument('--no-inkscape', action='store_true', help='Inkscape 가 있어도 WMF·EMF 변환에 쓰지 않는다')
+    ap.add_argument('--imagemagick', metavar='경로', default='', help='WMF·EMF 를 PNG 로 바꿀 ImageMagick 7 의 magick 실행 파일 (Inkscape 가 없거나 실패했을 때 씀. 기본: PATH 와 Windows 설치 위치에서 찾음. convert 는 쓰지 않음)')
+    ap.add_argument('--no-imagemagick', action='store_true', help='ImageMagick 이 있어도 WMF·EMF 변환에 쓰지 않는다')
+    ap.add_argument('--inkscape-timeout', type=int, default=60, help='그림 하나당 Inkscape·magick 제한 시간(초, 기본 60)')
     ap.add_argument('--no-pillow', action='store_true', help='Pillow 가 있어도 쓰지 않는다 (24비트 BMP 는 표준 라이브러리로 변환)')
     ap.add_argument('--no-crop', dest='crop', action='store_false', help='hwpx 의 그림 잘라내기 정보를 무시한다')
     ap.add_argument('--display', choices=['auto', 'none'], default='auto',

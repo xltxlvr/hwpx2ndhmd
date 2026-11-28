@@ -11,7 +11,7 @@
 import sys, os, re, json, zipfile, argparse, collections, math, posixpath, unicodedata
 import xml.etree.ElementTree as ET
 
-__version__ = '0.0.11'
+__version__ = '0.0.20'
 
 PN = 'http://www.hancom.co.kr/hwpml/2011/paragraph'
 HN = 'http://www.hancom.co.kr/hwpml/2011/head'
@@ -132,6 +132,12 @@ def pic_latex(doc, pic, path):
         return (hu(e.get(attr), 10 ** 7) or 0) if e is not None else 0
     w = dim('sz', 'width') or dim('curSz', 'width') or dim('orgSz', 'width')
     h = dim('sz', 'height') or dim('curSz', 'height') or dim('orgSz', 'height')
+    if path.lower().endswith(('.wmf', '.emf')):               # LaTeX 가 읽지 못하는 메타파일: 그림 자리만 테두리 상자로 남긴다 (PNG 로 바꾼 뒤 \includegraphics 로 바꾸면 된다)
+        doc.warn.append('그림 %s 는 LaTeX 가 읽지 못하는 형식이라 자리 표시 상자로 대신했습니다' % path)
+        wm = (w * HU_MM * doc.pic_scale) if w else None
+        wx = (r'\dimexpr\ifdim %.1fmm>\linewidth\linewidth\else %.1fmm\fi-2\fboxsep-2\fboxrule\relax' % (wm, wm)) if wm else r'\dimexpr0.9\linewidth-2\fboxsep-2\fboxrule\relax'
+        hx = '%.1fmm' % max((h * HU_MM * doc.pic_scale) if h else 20.0, 5.0)
+        return r'\fbox{\parbox{%s}{\centering\rule{0pt}{%s}\footnotesize [그림 %s]}}' % (wx, hx, tex_escape(os.path.basename(path)))   # (][ 는 마크다운 링크로 읽힐 수 있어 피한다)
     doc.need.add('graphicx')
     if not w: return r'\includegraphics[width=0.9\linewidth,keepaspectratio]{%s}' % path
     wm = w * HU_MM * doc.pic_scale
@@ -177,7 +183,7 @@ def eq_tex(doc, script):
 def wrap_flags(txt, f, doc):
     """서식 명령으로 감싼다. 줄바꿈(\\par) 사이마다 따로 감싸 \\underline 같은 상자 안에 \\par 가 들어가지 않게 한다."""
     if not (f['B'] or f['I'] or f['U'] or f['X']): return txt
-    pieces = re.split(r'(\s*\\par\s*)', txt)
+    pieces = re.split(r'(\s*\\par(?![A-Za-z])\s*)', txt)
     out = []
     for k, pc in enumerate(pieces):
         if k % 2 or not pc.strip():
@@ -234,7 +240,7 @@ def para_tex(doc, p, a):
                         add(f, r'\textsuperscript{(%s)}' % tex_escape(' '.join(t.split())), raw=True)
     s = ''.join(x[1] if x[2] else wrap_flags(x[1], x[0], doc) for x in segs)             # 수식·표 같은 덩어리(raw)는 서식을 입히지 않는다
     s = s.strip()
-    s = re.sub(r'(?:\s*\\par\s*)+$', '', s)               # 문단 끝의 강제 줄바꿈
+    s = re.sub(r'(?:\s*\\par(?![A-Za-z])\s*)+$', '', s)               # 문단 끝의 강제 줄바꿈
     al = doc.align.get(p.get('paraPrIDRef'), 'JUSTIFY')
     return s, al
 
@@ -254,7 +260,11 @@ def cell_tex(doc, tc, a):
     for s in paras:                                   # 빈 문단은 한 줄 띄움으로
         if not text: text = s; continue
         text += r' \par ' + s
-    if r'\par' in text: text = '{%s}' % text                      # \par 가 든 칸은 칸 전체를 중괄호로 묶는다
+    ps = re.split(r'\s*\\par(?![A-Za-z])\s*', text)                     # 칸 안의 줄바꿈은 \\ (\par 는 칸 폭을 넓혀 열 정렬을 해친다)
+    if len(ps) > 1:
+        while ps and not ps[-1].strip(): ps.pop()                       # 끝의 빈 줄은 버린다
+        text = ' \\\\ '.join(x if x.strip() else r'\strut' for x in ps)   # 내용 없는 줄(첫머리·연속 줄바꿈)은 \strut 으로 채운다: 내용 없는 \\ 는 'There's no line here to end' 오류
+    if '\\\\' in text: text = '{%s}' % text                        # \\ 가 든 칸은 칸 전체를 중괄호로 묶는다 (그 안에서 \\ 는 \newline)
     elif text.startswith(('[', '*')): text = '{}' + text           # 칸 첫머리의 [ 는 tabularray 가 선택 인자로 읽는다
     al = votes.most_common(1)[0][0] if votes else None
     return text, al
@@ -516,11 +526,11 @@ def table_tex(doc, tbl, a, nested=False, info=None):
         for x in range(nc):
             wd = max(W[x] * HU_MM * scale - 2 * sep, 3.0)
             spec_cols.append('Q[%s,wd=%.1fmm]' % (colal[x], wd))
-    elif mode in ('width', 'capped', 'linewidth'):
+    elif mode in ('width', 'capped', 'linewidth', 'textwidth'):
         inner = [max(W[x] - 2 * sep / HU_MM, 500.0) for x in range(nc)]          # 칸 안쪽(글이 놓이는 폭)의 비율
         tin = sum(inner)
         for x in range(nc): spec_cols.append('X[%s,co=%.2f]' % (colal[x], max(0.05, inner[x] / tin * 100)))
-        if mode == 'linewidth': extra.append('width=\\linewidth')
+        if mode in ('linewidth', 'textwidth'): extra.append('width=\\%s' % mode)
         else: extra.append('width=%.1fmm' % (min(tot_mm, textw_mm) if mode == 'capped' else tot_mm))
     else:
         spec_cols = list(colal)
@@ -530,7 +540,8 @@ def table_tex(doc, tbl, a, nested=False, info=None):
     if rs_mm is not None: keys.append('rowsep=%.2fmm' % rs_mm); gen_keys.append(keys[-1])
     # --- 머리글 행
     hdr = 0
-    if a.header != 'none' and env == 'longtblr':
+    if a.header.isdigit() and env == 'longtblr': hdr = int(a.header)          # 숫자: 한글의 제목 행과 상관없이 위에서 그만큼
+    elif a.header not in ('none', '0') and env == 'longtblr':
         for r in range(nr):
             row = [c for c in cells if c.r == r]
             if row and all(c.header for c in row): hdr += 1
@@ -561,21 +572,33 @@ def table_tex(doc, tbl, a, nested=False, info=None):
         for r, xs in sorted(byrow.items()): rg.setdefault(tuple(sorted(xs)), []).append(r)
         for xs, rs in rg.items():
             keys.append('cell{%s}{%s}={%s}' % (runs(rs), runs(xs), st)); cell_keys.append(keys[-1])
-    # --- 표 폭 전체를 차지하는 병합 칸(주석·자료 행 등): 열이 X/Q 형이라 칸 폭이 정해지지 않으면 긴 글이 줄바꿈되지 않고 잘리므로 wd 를 준다
+    # --- 행의 모든 열을 한 칸으로 합친 칸(주석·자료 행 등): 칸 폭이 정해지지 않으면 긴 글이 줄바꿈되지 않고 잘리므로 늘 wd 를 준다
+    note_wd = {}
     if nc >= 2:
-        if mode == 'linewidth': full = '\\dimexpr\\linewidth-%.2fmm\\relax' % (2 * sep)
+        if mode in ('linewidth', 'textwidth'): full = '\\dimexpr\\%s-%.2fmm\\relax' % (mode, 2 * sep)
         else:
             tw_mm = (min(tot_mm, textw_mm) if mode == 'capped' else tot_mm) if mode in ('width', 'capped') else (sum(W) * HU_MM * min(1.0, textw_mm / tot_mm if tot_mm else 1.0))
-            full = '%.1fmm' % max(tw_mm - 2 * sep, 10.0) if mode in ('width', 'capped', 'fixed') else None
+            full = '%.1fmm' % max(tw_mm - 2 * sep, 10.0)                # natural 에서도 표 가로 길이(한글 기준)로 준다
         if full:
             seen_c = set()
             for r in range(nr):
                 c = own[r][0]
-                if id(c) in seen_c or c.r != r or c.c != 0 or c.cs != nc or c.rs != 1: continue
+                if id(c) in seen_c or c.r != r or c.c != 0 or c.cs != nc: continue
                 seen_c.add(id(c))
-                t = body[id(c)][0]
-                if r == nr - 1 or '\\par' in t or len(t) >= 60:
-                    keys.append('cell{%d}{1}={wd=%s}' % (r + 1, full)); cell_keys.append(keys[-1])
+                note_wd[(r, 0)] = full; cell_keys.append('cell{%d}{1}={wd=%s}' % (r + 1, full))      # 행 전체가 한 칸으로 합쳐진 모든 행에 필수
+    # --- 병합(\SetCell 대신 선언부의 cell{행}{열}={r=,c=}{}): 같은 병합 모양의 칸은 행 범위 × 열 범위로 묶는다
+    spans = collections.defaultdict(list)
+    for c in cells:
+        if c.el is None or (c.rs == 1 and c.cs == 1): continue
+        o = (['r=%d' % c.rs] if c.rs > 1 else []) + (['c=%d' % c.cs] if c.cs > 1 else [])
+        spans[(','.join(o), note_wd.get((c.r, 0)) if c.c == 0 else None)].append(c)        # 전폭 칸은 wd 와 함께 따로 묶는다
+    for (st, wdv), cs in spans.items():
+        byrow = collections.defaultdict(list)
+        for c in cs: byrow[c.r].append(c.c)
+        rg = collections.OrderedDict()
+        for r, xs in sorted(byrow.items()): rg.setdefault(tuple(sorted(xs)), []).append(r)
+        for xs, rs in rg.items():
+            keys.append('cell{%s}{%s}={%s}{%s}' % (runs(rs), runs(xs), st, 'wd=' + wdv if wdv else ''))
     # --- 테두리
     H, V = edge_styles(doc, own, nr, nc, a)
     line_keys = line_specs('hline', H, nr + 1, nc) + line_specs_v(V, nr, nc)
@@ -588,9 +611,6 @@ def table_tex(doc, tbl, a, nested=False, info=None):
             c = own[r][x]
             if c.r != r or c.c != x: row.append(''); continue
             txt = body[id(c)][0]
-            if c.rs > 1 or c.cs > 1:
-                o = (['r=%d' % c.rs] if c.rs > 1 else []) + (['c=%d' % c.cs] if c.cs > 1 else [])
-                txt = r'\SetCell[%s]{} %s' % (','.join(o), txt)
             row.append(txt)
         lines.append(' & '.join(row).rstrip() + r' \\')
     cap = ''
@@ -678,6 +698,17 @@ def table_text_preview(tbl):
     return ' '.join(t.split())[:40]
 
 
+MAX_HEADER = 5
+
+
+def header_arg(v):
+    if v in ('auto', 'first', 'none'): return v
+    if v.isdigit():
+        if int(v) > MAX_HEADER: raise argparse.ArgumentTypeError('머리글 행은 %d 행까지만 지정할 수 있습니다: %s' % (MAX_HEADER, v))
+        return v
+    raise argparse.ArgumentTypeError('auto, first, none 또는 0~%d 의 숫자여야 합니다: %s' % (MAX_HEADER, v))
+
+
 def build_parser():
     ap = argparse.ArgumentParser(description='hwpx 의 표 -> tabularray (tblr/longtblr)  (version %s)' % __version__)
     ap.add_argument('-V', '--version', action='version', version='hwpx2tblr %s' % __version__)
@@ -692,8 +723,8 @@ def build_parser():
     ap.add_argument('--env', choices=['auto', 'tblr', 'longtblr'], default='auto', help='auto: 긴 표만 longtblr')
     ap.add_argument('--long-table', type=float, default=0.7, help='추정 높이가 본문 높이의 이 배 이상이면 longtblr (0=끔, 기본 0.7)')
     ap.add_argument('--long-table-rows', type=int, default=30, help='행이 이 수 이상이면 longtblr (0=끔, 기본 30)')
-    ap.add_argument('--colspec', choices=['auto', 'width', 'linewidth', 'fixed', 'natural'], default='auto',
-                    help='width: 모든 열을 X[co=칸 너비 비율]로 하고 width=표의 가로 길이(mm) / linewidth: width=\\linewidth / fixed: 칸마다 Q[wd=mm] / natural: 글 길이대로 / auto: width 이되 본문 너비보다 길면 본문 너비로 줄임')
+    ap.add_argument('--colspec', choices=['auto', 'width', 'linewidth', 'textwidth', 'fixed', 'natural'], default='auto',
+                    help='width: 모든 열을 X[co=칸 너비 비율]로 하고 width=표의 가로 길이(mm) / linewidth: width=\\linewidth / textwidth: width=\\textwidth / fixed: 칸마다 Q[wd=mm] / natural: 글 길이대로 / auto: width 이되 본문 너비보다 길면 본문 너비로 줄임')
     ap.add_argument('--textwidth', type=float, default=0, help='본문 너비(mm). 기본은 문서의 쪽 설정')
     ap.add_argument('--no-margins', dest='margins', action='store_false', help='한글의 칸 안쪽 여백을 쓰지 않고 tabularray 기본값을 쓴다')
     ap.add_argument('--max-sep', type=float, default=5.0, help='칸 안쪽 여백의 최대(mm, 기본 5)')
@@ -703,7 +734,8 @@ def build_parser():
     ap.add_argument('--no-format', dest='format', action='store_false', help='굵게·기울임·밑줄·취소선을 옮기지 않는다')
     ap.add_argument('--justify', action='store_true', help='양쪽 정렬 문단을 j(양쪽 맞춤)로 낸다 (기본 l)')
     ap.add_argument('--no-wavedash', dest='wavedash', action='store_false', help='∼(U+223C)를 물결표(U+301C)로, 곧은 따옴표를 굽은 따옴표로 바꾸지 않는다')
-    ap.add_argument('--header', choices=['auto', 'first', 'none'], default='auto', help='longtblr 머리글 행: 한글의 제목 행 / 첫 행 / 없음')
+    ap.add_argument('--header', type=header_arg, default='auto', metavar='{auto,first,none,1..%d}' % MAX_HEADER,
+                    help='longtblr 머리글 행(rowhead): auto 한글의 제목 행 / first 첫 행 / none 없음 / 숫자 위에서 그만큼 (최대 %d)' % MAX_HEADER)
     return ap
 
 

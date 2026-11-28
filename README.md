@@ -182,6 +182,7 @@ python hwpx2ndhmd.py --version
 - **각주·미주 안에는 표를 둘 수 없습니다.** 각주 안의 표는 행마다 한 문단의 글로 바꾸므로 표 모양은 사라집니다(칸은 ` / `로 이음). 필요하면 그 부분을 직접 고쳐 쓰십시오.
 - **각주·미주 안의 문단은 빈 줄로 나눌 수 없습니다.** 문단 경계는 `\\`(줄바꿈)로 나타내므로 문단 사이 간격이나 들여쓰기는 사라집니다.
 - **각주·미주 안의 인용문은 `quote`만 됩니다.** 글상자 같은 것이 각주 안에 있으면 `quote`로 냅니다. 문단이 여럿이어도 `quotation`을 쓰지 않습니다(ndhmd4tex 의 `footnote_envs` 에 `quotation`을 넣으면 고쳐 쓸 수 있습니다).
+- **WMF·EMF 그림은 LaTeX 가 읽지 못합니다.** [Inkscape](https://inkscape.org/)를 찾을 수 있으면(`--inkscape 경로`, PATH, Windows 설치 위치) 명령행으로 PNG 로 바꿉니다. Inkscape 가 없거나 실패하면 ImageMagick 7 의 `magick` 으로 시도합니다(`convert` 는 쓰지 않습니다. Windows 에서는 해상도가 낮게 나오고 `-density` 도 효과가 없다는 보고가 있습니다). 둘 다 안 되면 원본은 그대로 저장하고, 본문의 삽입 명령은 `<!-- ![…](image2.wmf){…} -->` 로 주석을 걸어 자리만 남깁니다(PNG 로 바꾼 뒤 주석을 풀면 됩니다). 표 칸 속 그림은 같은 크기의 `[그림 파일이름]` 테두리 상자가 됩니다. wmf 안의 글자는 Inkscape 에 그 글꼴이 없으면 모양이 달라질 수 있습니다.
 - **BMP 그림은 컴파일 엔진에 따라 넣을 수 없습니다.** 변환기는 BMP 를 PNG 로 바꿔 저장하지만, Pillow 가 없고 24비트 압축 없는 BMP 가 아니면 원본 BMP 를 그대로 저장하고 경고를 냅니다. 그런 그림이 있으면 Pillow 를 설치하고 다시 변환하세요.
 
 ## 쪽 설정 기록 (`--layout`)
@@ -216,6 +217,11 @@ python hwpx2ndhmd.py --version
 | `--image-dir DIR` | 출력과 같은 폴더 | 그림 저장 폴더(출력 파일 기준) |
 | `--image-prefix S` | | 그림 파일 이름 앞에 붙일 글 |
 | `--no-pillow` | | Pillow 를 쓰지 않음 |
+| `--inkscape 경로` | | WMF·EMF 를 PNG 로 바꿀 Inkscape (기본: 찾을 수 있으면 자동) |
+| `--no-inkscape` | | Inkscape 가 있어도 쓰지 않음 |
+| `--imagemagick 경로` | | Inkscape 가 안 될 때 WMF·EMF 를 PNG 로 바꿀 `magick` (기본: 찾을 수 있으면 자동) |
+| `--no-imagemagick` | | ImageMagick 이 있어도 쓰지 않음 |
+| `--inkscape-timeout 초` | 60 | 그림 하나당 제한 시간 (Inkscape·magick 공통) |
 | `--no-crop` | | 그림 잘라내기 정보를 무시 |
 | `--no-table-conversion` | 끔 | 표를 변환하지 않고 칸 안의 글만 칸 순서대로 평문단으로 남김 (별칭 `--table-conversion-false`) |
 | `--notes-at-end` | 끔 | 각주·미주를 문서 끝에 평문단으로 모음 (아래 "각주와 미주") |
@@ -243,7 +249,8 @@ python hwpx2ndhmd.py --version
 | 파일 | 설명 |
 |---|---|
 | `hwpx2ndhmd.py` | 본체 (명령줄 도구) |
-| `hwpx2tblr.py` | 표 → tabularray 변환기 (`--table tblr`가 불러 씀.) |
+| `hwpx2tblr.py` | 표 → tabularray 변환기 (`--table tblr`가 불러 씀. [hwpx2tblr](../hwpx2tblr)의 같은 파일이며 단독으로도 돈다) |
+| `tests/` | 시험 (`python3 -m unittest discover -s tests`; ndhmd4tex.py 와 xelatex 가 있으면 조판까지 확인. 환경변수 `NDHMD4TEX`로 위치 지정) |
 | `hwpeq.py` | 한컴 수식 → LaTeX 변환기 (단독으로 `import hwpeq; hwpeq.convert(…)`로도 쓸 수 있음) |
 | `hwpeq_tables.py` | 명령 이름 표 (`gen/gen_tables.py`가 만든 것이라 직접 고치지 않음) |
 | `gen/gen_tables.py` | rhwp 의 `symbols.rs`에서 `hwpeq_tables.py`를 만드는 생성기 (실행에만 `pylatexenc` 필요) |

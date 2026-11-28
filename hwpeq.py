@@ -29,6 +29,55 @@ STD_FUNC = {'sin', 'cos', 'tan', 'cot', 'sec', 'csc', 'arcsin', 'arccos', 'arcta
 GLUE = ['sinh', 'cosh', 'tanh', 'coth', 'sech', 'csch', 'sin', 'cos', 'tan', 'sec', 'csc', 'cot', 'min', 'overrightarrow',
         'overleftarrow', 'widehat', 'widetilde', 'overline', 'underline', 'bar', 'vec', 'dyad', 'hat', 'tilde', 'dot', 'ddot',
         'acute', 'grave', 'check', 'breve', 'leq', 'geq', 'neq', 'triangle', 'angle', 'cap', 'cup', 'cdots', 'ldots', 'vdots', 'ddots']
+MATHSYM = {
+    '\u2261': r'\equiv ', '\u2264': r'\le ', '\u2265': r'\ge ', '\u2260': r'\neq ', '\u2248': r'\approx ', '\u2245': r'\cong ', '\u221d': r'\propto ',
+    '\u226a': r'\ll ', '\u226b': r'\gg ', '\u21d2': r'\Rightarrow ', '\u21d4': r'\Leftrightarrow ', '\u21d0': r'\Leftarrow ',
+    '\u2192': r'\rightarrow ', '\u2190': r'\leftarrow ', '\u2194': r'\leftrightarrow ', '\u21a6': r'\mapsto ',
+    '\u2208': r'\in ', '\u2209': r'\notin ', '\u220b': r'\ni ', '\u2282': r'\subset ', '\u2283': r'\supset ', '\u2286': r'\subseteq ', '\u2287': r'\supseteq ',
+    '\u222a': r'\cup ', '\u2229': r'\cap ', '\u2205': r'\emptyset ', '\u221e': r'\infty ',
+    '\u00b1': r'\pm ', '\u2213': r'\mp ', '\u00d7': r'\times ', '\u00f7': r'\div ', '\u00b7': r'\cdot ', '\u22c5': r'\cdot ', '\u2219': r'\cdot ', '\u2218': r'\circ ',
+    '\u2211': r'\sum ', '\u220f': r'\prod ', '\u222b': r'\int ', '\u2202': r'\partial ', '\u2207': r'\nabla ',
+    '\u2200': r'\forall ', '\u2203': r'\exists ', '\u2227': r'\wedge ', '\u2228': r'\vee ', '\u00ac': r'\neg ',
+    '\u2234': r'\therefore ', '\u2235': r'\because ', '\u22a5': r'\perp ', '\u2225': r'\parallel ', '\u2220': r'\angle ',
+    '\u2124': r'\mathbb{Z}', '\u2115': r'\mathbb{N}', '\u211a': r'\mathbb{Q}', '\u211d': r'\mathbb{R}', '\u2102': r'\mathbb{C}',
+    '\u2212': '-', '\u2223': '|', '\u200b': '', '\u2060': '', '\ufeff': '',
+}
+
+
+def na_tex(v):
+    """비ASCII 덩어리: 수학 기호는 수식 명령으로, 나머지(한글 등)는 \\text{…} 로"""
+    out = []; buf = ''
+    for ch in v:
+        if ch in MATHSYM:
+            if buf: out.append(r'\text{' + text_escape(buf) + '}'); buf = ''
+            out.append(MATHSYM[ch])
+        else: buf += ch
+    if buf: out.append(r'\text{' + text_escape(buf) + '}')
+    return ''.join(out)
+
+
+def tstrip(x):
+    """앞뒤 공백을 지우되, 끝의 제어 공백 '\\ ' 은 지키지 않으면 \\ 가 뒤따르는 } 를 이스케이프해 버린다"""
+    y = x.rstrip()
+    if len(y) < len(x) and (len(y) - len(y.rstrip('\\'))) % 2 == 1: y += ' '
+    return y.lstrip()
+
+
+def _greek_u():
+    import unicodedata
+    m = {}
+    for cp in list(range(0x391, 0x3AA)) + list(range(0x3B1, 0x3CA)):
+        try: nm = unicodedata.name(chr(cp))
+        except ValueError: continue
+        w = nm.split()[-1]                                      # 'GREEK SMALL LETTER TAU' -> TAU
+        if 'FINAL' in nm: m[chr(cp)] = 'varsigma'; continue
+        m[chr(cp)] = w.lower() if 'SMALL' in nm else w
+    m.update({'\u03d5': 'varphi', '\u03f5': 'varepsilon', '\u03d1': 'vartheta', '\u03d6': 'varpi', '\u03f1': 'varrho'})
+    return m
+
+
+GREEK_U = _greek_u()
+ELLIPSIS = {'\u2026': 'ldots', '\u22ef': 'cdots', '\u22ee': 'vdots', '\u22f1': 'ddots'}
 SYMKEYS = sorted({k for t in ORDER for k in T[t] if not k[0].isalpha()}, key=lambda k: -len(k))   # '<=', '!=', '>>>' ...
 
 
@@ -169,8 +218,12 @@ def tokenize(src):
                 if done: continue
                 toks.append(('id', w)); break
             continue
+        if c in GREEK_U:                                        # 글자로 들어온 그리스 문자 τ σ Σ … -> 같은 이름의 수식 명령
+            toks.append(('cmd', GREEK_U[c])); i += 1; continue
+        if c in ELLIPSIS:                                       # 글자로 들어온 줄임표 … ⋯ ⋮ ⋱ -> \ldots \cdots \vdots \ddots
+            toks.append(('cmd', ELLIPSIS[c])); i += 1; continue
         j = i
-        while j < n and not (src[j].isascii() or src[j].isspace()): j += 1   # 한글 등 비ASCII 덩어리
+        while j < n and not (src[j].isascii() or src[j].isspace() or src[j] in ELLIPSIS or src[j] in GREEK_U): j += 1   # 한글 등 비ASCII 덩어리
         if j == i: j = i + 1
         toks.append(('na', src[i:j])); i = j
     if mark is not None and len(toks) > mark: toks.sp.add(mark)
@@ -276,7 +329,7 @@ class P:
             if s.font == 'rm' and v.strip() in OPERATORS: return '\\' + v.strip() + ' '      # rm "inf" -> \inf (아래첨자가 밑에 붙도록)
             wrap = {'rm': r'\text{', 'bold': r'\textbf{'}.get(s.font, r'\textit{' if v.isascii() else r'\text{')   # 한글 글자는 기울이지 않음
             return wrap + text_escape(v) + '}'
-        if k == 'na': return r'\text{' + text_escape(v) + '}'
+        if k == 'na': return na_tex(v)
         if k == 'arrow': return r'\to ' if v == '->' else r'\leftarrow '
         if k == 'id': return s.wrap_font(v)
         if k == 'ch':
@@ -314,7 +367,7 @@ class P:
             return '\\begin{%s}%s\\end{%s}' % (env, body, env)
         if lo == 'inf': return r'\infty '
         if lo in DECO:
-            return DECO[lo] + '{' + s.run(chunk=True).strip() + '}'
+            return DECO[lo] + '{' + tstrip(s.run(chunk=True)) + '}'
         if v == 'lim' or v == 'Lim' or up == 'LIM': return r'\lim '
         if v in T['FUNCTIONS'] or lo in T['FUNCTIONS']:
             f = v if v in T['FUNCTIONS'] else lo
@@ -338,8 +391,8 @@ class P:
                     s.i += 1; idx = s.seq(stop=')'); s.i += 1
                 s.i += 1                                            # OF
         if idx is None and s.i + 1 < len(s.t) and s.t[s.i + 1][0] == 'cmd' and s.t[s.i + 1][1].upper() == 'OF':
-            idx = str(s.atom()).strip(); s.i += 1                  # ROOT n OF x (단일 원자 지수)
-        body = s.run(chunk=True).strip()
+            idx = tstrip(str(s.atom())); s.i += 1                  # ROOT n OF x (단일 원자 지수)
+        body = tstrip(s.run(chunk=True))
         return (r'\sqrt[' + idx + ']{' + body + '}') if idx is not None else r'\sqrt{' + body + '}'
 
     def match(s, i):
@@ -353,11 +406,11 @@ class P:
         return len(s.t)
 
     # ---- 첨자
-    def operand(s, up):
+    def operand(s, up, other=False):
         """첨자 인자. {…} 가 아니면 rhwp(한컴과 같은 규칙)처럼 공백·닫는 괄호·RIGHT·반대쪽 첨자 앞까지
         붙은 토큰을 모두 인자로 삼는다:  sum_i=1^n  ->  \\sum_{i=1}^n,   x^2+1 -> x^{2+1},   x^2 +1 -> x^2+1"""
         k, v = s.peek()
-        if (k, v) == ('ch', '{'): return str(s.atom()).strip()
+        if (k, v) == ('ch', '{'): return tstrip(str(s.atom()))
         items = []
         while True:
             k, v = s.peek()
@@ -368,22 +421,26 @@ class P:
             is_up = (k, v) == ('ch', '^') or (k == 'cmd' and v.upper() == 'SUP')
             is_dn = (k, v) == ('ch', '_') or (k == 'cmd' and v.upper() == 'SUB')
             if is_up or is_dn:
-                if is_up != up or not items: break                  # 반대쪽 첨자는 바깥 몫
-                items.append(s.script(items.pop())); continue
+                if (is_up != up and not other) or not items: break      # 반대쪽 첨자는 바깥 몫 (밑에 이미 그쪽 첨자가 있으면 same 첨자를 겹칠 수 없으니 이 인자의 몫: p_{1}^q_{1} -> p_1^{q_1})
+                items.append(s.script(items.pop()))
+                if is_up != up: break                               # 겹침을 피하려고 가져온 반대쪽 첨자는 여기서 인자를 끝낸다
+                continue
             if (k, v) == ('ch', '('):
                 s.i += 1; inner = s.seq(stop=')')
                 if s.peek() == ('ch', ')'): s.i += 1
                 items.append('(' + inner + ')'); continue
             items.append(str(s.atom()))
-        return ''.join(items).strip()
+        return tstrip(''.join(items))
 
     def script(s, base):
+        seen = set()                                                # 이 밑에 이미 붙은 첨자 종류
         while True:
             k, v = s.peek()
             if (k, v) in (('ch', '^'), ('ch', '_')) or (k == 'cmd' and v.upper() in ('SUB', 'SUP')):
                 s.i += 1
                 up = v == '^' or v.upper() == 'SUP'
-                a = s.operand(up)
+                a = s.operand(up, other=(('d' if up else 'u') in seen))
+                seen.add('u' if up else 'd')
                 if isinstance(base, G): base = '{' + base + '}'    # 그룹에 첨자가 붙을 때만 밑에 괄호
                 a = a if re.fullmatch(r'[A-Za-z0-9]', a) or re.fullmatch(r'\\[A-Za-z]+ ?', a) else '{' + a + '}'
                 base = str(base) + ('^' if up else '_') + a
@@ -425,10 +482,12 @@ class P:
                 j = len(out) - 1
                 while j > 0 and out.starts[j] not in s.sp and out.starts[j] not in s.brk: j -= 1     # 공백 또는 9글자 끊김에서 끝
                 j = max(j, 0)
+                for q in range(len(out) - 1, j - 1, -1):       # left( 처럼 여는 구분자는 분자에 속하지 않는다: left({n}over{d} right) -> \left(\frac{n}{d}\right)
+                    if str(out[q]).startswith('\\left') and '\\right' not in str(out[q]): j = q + 1; break
                 num = ''.join(str(x) for x in out[j:]); start0 = out.starts[j] if out else s.i
                 del out[j:]; del out.starts[j:]
                 den = s.run(chunk=True)                        # 분모도 공백 전까지 붙은 것, 단 9글자까지
-                num, den = num.strip(), den.strip()
+                num, den = tstrip(num), tstrip(den)
                 cur[0] = start0
                 if v.upper() == 'OVER': out.append(r'\frac{' + num + '}{' + den + '}')
                 elif v.upper() == 'ATOP': out.append(r'{' + num + r'\atop ' + den + '}')
@@ -502,7 +561,7 @@ def convert(src):
     r = re.sub(r'(\\mathbf\{[^{}]*)\}\\mathbf\{', r'\1', r)
     r = re.sub(r'(?:\\,|\\ ){2,}', r'\\,', r)                            # 간격 연속 -> 하나로
     r = re.sub(r'(\\[A-Za-z]+) +(?=[\\{}^_)\]&|,.]|$)', r'\1', r)        # 명령 뒤 불필요한 공백
-    return balance_lr(r.strip(), src)
+    return balance_lr(tstrip(r), src)
 
 
 if __name__ == '__main__':
