@@ -12,7 +12,7 @@ import xml.etree.ElementTree as ET
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import hwpeq
 
-__version__ = '0.0.27'
+__version__ = '0.0.28'
 
 PN = 'http://www.hancom.co.kr/hwpml/2011/paragraph'
 HN = 'http://www.hancom.co.kr/hwpml/2011/head'
@@ -501,7 +501,7 @@ def para_parts(ctx, p):
                     if ct == 'tab': buf.append(' ')
                     elif ct == 'lineBreak': buf.append('  \n')
                     buf.append(c.tail or '')
-                s_t = ''.join(buf)
+                s_t = ''.join(buf).replace('$', '\\$').replace('%', '\\%')      # ndhmd4tex 는 $…$ 를 수식으로 묶고 % 는 TeX 주석이므로 글 속의 $ 와 % 는 늘 이스케이프
                 if '\u223c' in s_t:                      # 옛 입력기가 물결표로 찍던 ∼(U+223C): 글 속에서는 \~ 로 내고 mappingrule wavedash 로 물결표를 만든다
                     s_t = s_t.replace('\u223c', '\\~'); ctx.used_wavedash = True
                 t(ctx.mark(p, run, s_t))
