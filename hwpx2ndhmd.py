@@ -12,7 +12,7 @@ import xml.etree.ElementTree as ET
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import hwpeq
 
-__version__ = '0.0.26'
+__version__ = '0.0.27'
 
 PN = 'http://www.hancom.co.kr/hwpml/2011/paragraph'
 HN = 'http://www.hancom.co.kr/hwpml/2011/head'
@@ -725,6 +725,11 @@ def tblr_pic(ctx, pic):
     return hwpx2tblr.pic_latex(ctx.tdoc, pic, path)
 
 
+def table_has_caption(t):
+    ce = t.find(p_('caption'))
+    return ce is not None and bool(''.join(ce.itertext()).strip())
+
+
 def tblr_table(ctx, t):
     """표 -> tabularray 원문(hwpx2tblr). 바로 \\begin{tblr}…\\end{tblr} 로 낸다 (ndhmd4tex 는 이 구간을 건드리지 않는다). 못 만들면 None"""
     try:
@@ -784,6 +789,9 @@ def table(ctx, t):
     ctext = lambda c: pipe_cell(ctx, c)
     mode = a.table
     if mode == 'tblr' and rows and not ctx.in_fn:
+        tex = tblr_table(ctx, t)
+        if tex: return tex
+    if mode == 'auto' and rows and not ctx.in_fn and table_has_caption(t):      # 캡션은 파이프·grid 표로는 보존되지 않으므로 캡션이 있는 표만 longtblr 로
         tex = tblr_table(ctx, t)
         if tex: return tex
     if mode in ('auto', 'grid') and not simple or mode == 'grid':

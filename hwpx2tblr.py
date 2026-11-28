@@ -11,7 +11,7 @@
 import sys, os, re, json, zipfile, argparse, collections, math, posixpath, unicodedata
 import xml.etree.ElementTree as ET
 
-__version__ = '0.0.10'
+__version__ = '0.0.11'
 
 PN = 'http://www.hancom.co.kr/hwpml/2011/paragraph'
 HN = 'http://www.hancom.co.kr/hwpml/2011/head'
@@ -441,6 +441,14 @@ def est_height(doc, cells, nr, widths):
 
 
 # ───────────────────────── 표 -> tblr ─────────────────────────
+def caption_text(tbl):
+    """표의 캡션 글(없으면 ''). 한글이 붙인 자동 번호('표 1')는 hwpx 에 글자로 들어 있지 않으므로 그대로 쓴다"""
+    ce = tbl.find(p_('caption'))
+    if ce is None: return ''
+    ct = ' '.join(' '.join(''.join(x.itertext()) for x in q.iter(p_('t'))) for q in ce.iter(p_('p')))
+    return ' '.join(ct.split())
+
+
 def table_tex(doc, tbl, a, nested=False, info=None):
     cells, own, nr, nc, im = read_table(doc, tbl, a)
     # --- 칸 너비 (HWPUNIT)
@@ -479,7 +487,8 @@ def table_tex(doc, tbl, a, nested=False, info=None):
     nrows_long = a.long_table_rows and nr >= a.long_table_rows
     hh = est_height(doc, cells, nr, W) if doc.body_h > 0 else 0
     is_long = bool(nrows_long or (a.long_table and doc.body_h > 0 and hh >= a.long_table * doc.body_h))
-    env = {'tblr': 'tblr', 'longtblr': 'longtblr'}.get(a.env, 'longtblr' if is_long and not nested else 'tblr')
+    has_cap = caption_text(tbl) != ''
+    env = {'tblr': 'tblr', 'longtblr': 'longtblr'}.get(a.env, 'longtblr' if (is_long or has_cap) and not nested else 'tblr')     # 캡션이 있는 표만 longtblr 로(캡션은 longtblr 에서만 붙음)
     if nested: env = 'tblr'
     ename = env
     if nested and doc.sub_env: ename = 'sub' * doc.depth + 'tblr'; doc.sub_names.add(ename)
@@ -527,6 +536,7 @@ def table_tex(doc, tbl, a, nested=False, info=None):
             if row and all(c.header for c in row): hdr += 1
             else: break
         if a.header == 'first' and hdr == 0: hdr = 1
+    hdr = min(hdr, nr - 1)                                         # rowhead 가 행 수 이상이면 longtblr 가 깨진다(한 행짜리 표)
     if hdr: keys.append('rowhead=%d' % hdr)
     # --- 칸 서식(세로 정렬, 가로 정렬 예외, 바탕색)
     vv = collections.Counter(c.valign for c in cells if c.el is not None)
@@ -584,11 +594,8 @@ def table_tex(doc, tbl, a, nested=False, info=None):
             row.append(txt)
         lines.append(' & '.join(row).rstrip() + r' \\')
     cap = ''
-    ce = tbl.find(p_('caption'))
-    if ce is not None and env == 'longtblr' and not nested:
-        ct = ' '.join(' '.join(''.join(x.itertext()) for x in q.iter(p_('t'))) for q in ce.iter(p_('p')))
-        ct = ' '.join(ct.split())
-        if ct: cap = '[caption={%s}]' % tex_escape(ct)
+    ct = caption_text(tbl)
+    if ct and env == 'longtblr' and not nested: cap = '[caption={%s}]' % tex_escape(ct)
     if hh and doc.body_h and hh > doc.body_h * 0.95 and nr <= 3 and not nested:
         doc.warn.append('행이 적은데 한 쪽을 넘는 표가 있습니다(%d행 %d열): tblr/longtblr 은 행 가운데서 쪽을 나눌 수 없어 빈 쪽이 생길 수 있습니다' % (nr, nc))
     if env == 'longtblr' and not cap: cap = '[entry=none,label=none]'       # 캡션이 없으면 'Table N:' 머리줄을 없앤다
