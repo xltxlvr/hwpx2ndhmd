@@ -12,7 +12,7 @@ import xml.etree.ElementTree as ET
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import hwpeq
 
-__version__ = '0.0.25'
+__version__ = '0.0.26'
 
 PN = 'http://www.hancom.co.kr/hwpml/2011/paragraph'
 HN = 'http://www.hancom.co.kr/hwpml/2011/head'

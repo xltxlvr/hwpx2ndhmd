@@ -11,7 +11,7 @@
 import sys, os, re, json, zipfile, argparse, collections, math, posixpath, unicodedata
 import xml.etree.ElementTree as ET
 
-__version__ = '0.0.9'
+__version__ = '0.0.10'
 
 PN = 'http://www.hancom.co.kr/hwpml/2011/paragraph'
 HN = 'http://www.hancom.co.kr/hwpml/2011/head'
@@ -551,6 +551,21 @@ def table_tex(doc, tbl, a, nested=False, info=None):
         for r, xs in sorted(byrow.items()): rg.setdefault(tuple(sorted(xs)), []).append(r)
         for xs, rs in rg.items():
             keys.append('cell{%s}{%s}={%s}' % (runs(rs), runs(xs), st)); cell_keys.append(keys[-1])
+    # --- 표 폭 전체를 차지하는 병합 칸(주석·자료 행 등): 열이 X/Q 형이라 칸 폭이 정해지지 않으면 긴 글이 줄바꿈되지 않고 잘리므로 wd 를 준다
+    if nc >= 2:
+        if mode == 'linewidth': full = '\\dimexpr\\linewidth-%.2fmm\\relax' % (2 * sep)
+        else:
+            tw_mm = (min(tot_mm, textw_mm) if mode == 'capped' else tot_mm) if mode in ('width', 'capped') else (sum(W) * HU_MM * min(1.0, textw_mm / tot_mm if tot_mm else 1.0))
+            full = '%.1fmm' % max(tw_mm - 2 * sep, 10.0) if mode in ('width', 'capped', 'fixed') else None
+        if full:
+            seen_c = set()
+            for r in range(nr):
+                c = own[r][0]
+                if id(c) in seen_c or c.r != r or c.c != 0 or c.cs != nc or c.rs != 1: continue
+                seen_c.add(id(c))
+                t = body[id(c)][0]
+                if r == nr - 1 or '\\par' in t or len(t) >= 60:
+                    keys.append('cell{%d}{1}={wd=%s}' % (r + 1, full)); cell_keys.append(keys[-1])
     # --- 테두리
     H, V = edge_styles(doc, own, nr, nc, a)
     line_keys = line_specs('hline', H, nr + 1, nc) + line_specs_v(V, nr, nc)
